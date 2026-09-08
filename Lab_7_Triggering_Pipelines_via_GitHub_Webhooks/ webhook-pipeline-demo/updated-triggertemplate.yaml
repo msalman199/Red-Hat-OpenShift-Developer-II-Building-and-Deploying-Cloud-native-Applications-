@@ -1,0 +1,36 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: github-push-template
+  namespace: webhook-pipeline-lab
+spec:
+  params:
+    - name: git-url
+      description: The git repository url
+    - name: git-revision
+      description: The git revision
+    - name: image-name
+      description: The image name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: enhanced-webhook-pipeline-run-
+        namespace: webhook-pipeline-lab
+        labels:
+          app: webhook-demo
+          trigger: github-webhook
+      spec:
+        pipelineRef:
+          name: enhanced-webhook-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-name
+            value: $(tt.params.image-name)
+        workspaces:
+          - name: shared-workspace
+            persistentVolumeClaim:
+              claimName: pipeline-workspace-pvc

@@ -1,0 +1,73 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: verify-workspace-data
+spec:
+  description: Verify all workspace data is accessible and complete
+  workspaces:
+    - name: source
+      description: Source workspace to verify
+      mountPath: /workspace/source
+  steps:
+    - name: verify-data
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        set -e
+        
+        echo "=== Final Workspace Verification ==="
+        
+        # Check workspace mount
+        echo "Workspace mounted at: /workspace/source"
+        df -h /workspace/source
+        
+        # Verify source code
+        echo "=== Source Code Verification ==="
+        if [ -f "/workspace/source/package.json" ]; then
+          echo "✓ Source code present"
+          echo "Package name: $(grep '"name"' /workspace/source/package.json | cut -d'"' -f4)"
+        else
+          echo "✗ Source code missing"
+        fi
+        
+        # Verify artifacts
+        echo "=== Artifacts Verification ==="
+        if [ -d "/workspace/source/artifacts" ]; then
+          echo "✓ Artifacts directory present"
+          ARTIFACT_COUNT=$(ls /workspace/source/artifacts/ | wc -l)
+          echo "Artifact files: $ARTIFACT_COUNT"
+          
+          # Check specific artifacts
+          for artifact in build-info.json build-report.txt version.txt processing-summary.txt; do
+            if [ -f "/workspace/source/artifacts/$artifact" ]; then
+              echo "✓ $artifact present"
+            else
+              echo "✗ $artifact missing"
+            fi
+          done
+        else
+          echo "✗ Artifacts directory missing"
+        fi
+        
+        # Generate final report
+        cat > /workspace/source/final-report.txt << EOF
+        Final Pipeline Report
+        =====================
+        Execution Time: $(date)
+        Workspace Size: $(du -sh /workspace/source | cut -f1)
+        Total Files: $(find /workspace/source -type f | wc -l)
+        Source Files: $(find /workspace/source -name "*.js" -o -name "*.json" | wc -l)
+        Artifact Files: $(find /workspace/source/artifacts -type f 2>/dev/null | wc -l)
+        
+        Verification Status: COMPLETE
+        EOF
+        
+        echo "=== Final Report ==="
+        cat /workspace/source/final-report.txt
+        
+        echo "=== Workspace Summary ==="
+        echo "Total workspace usage:"
+        du -sh /workspace/source
+        echo ""
+        echo "Directory structure:"
+        find /workspace/source -type d | sort

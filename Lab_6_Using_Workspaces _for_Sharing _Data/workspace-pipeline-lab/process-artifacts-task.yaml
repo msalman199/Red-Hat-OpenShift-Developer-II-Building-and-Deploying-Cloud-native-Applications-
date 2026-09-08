@@ -1,0 +1,57 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: process-build-artifacts
+spec:
+  description: Process and validate build artifacts
+  workspaces:
+    - name: source
+      description: Source code workspace with artifacts
+      mountPath: /workspace/source
+  steps:
+    - name: process-artifacts
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        set -e
+        
+        echo "=== Processing Build Artifacts ==="
+        
+        # Check if artifacts directory exists
+        if [ ! -d "/workspace/source/artifacts" ]; then
+          echo "ERROR: Artifacts directory not found!"
+          exit 1
+        fi
+        
+        echo "=== Available Artifacts ==="
+        ls -la /workspace/source/artifacts/
+        
+        # Process build info
+        if [ -f "/workspace/source/artifacts/build-info.json" ]; then
+          echo "=== Build Information ==="
+          cat /workspace/source/artifacts/build-info.json | python3 -m json.tool
+        fi
+        
+        # Process build report
+        if [ -f "/workspace/source/artifacts/build-report.txt" ]; then
+          echo "=== Build Report ==="
+          cat /workspace/source/artifacts/build-report.txt
+        fi
+        
+        # Process version
+        if [ -f "/workspace/source/artifacts/version.txt" ]; then
+          VERSION=$(cat /workspace/source/artifacts/version.txt)
+          echo "=== Application Version: $VERSION ==="
+        fi
+        
+        # Create summary
+        cat > /workspace/source/artifacts/processing-summary.txt << EOF
+        Processing Summary
+        ==================
+        Processed at: $(date)
+        Artifacts found: $(ls /workspace/source/artifacts/ | wc -l)
+        Processing status: SUCCESS
+        EOF
+        
+        echo "=== Processing Complete ==="
+        cat /workspace/source/artifacts/processing-summary.txt

@@ -1,0 +1,25 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: multi-workspace-demo
+spec:
+  description: Pipeline demonstrating multiple workspace types
+  workspaces:
+    - name: source-data
+      description: Main source code workspace (PVC)
+    - name: temp-data
+      description: Temporary data workspace (emptyDir)
+    - name: config-data
+      description: Configuration data workspace (ConfigMap)
+      optional: true
+  tasks:
+    - name: setup-workspaces
+      taskRef:
+        name: workspace-setup-task
+      workspaces:
+        - name: source
+          workspace: source-data
+        - name: temp
+          workspace: temp-data
+        - name: config
+          workspace: config-data

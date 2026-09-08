@@ -1,0 +1,16 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: multi-workspace-test-$(date +%s)
+spec:
+  pipelineRef:
+    name: multi-workspace-demo
+  workspaces:
+    - name: source-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc
+    - name: temp-data
+      emptyDir: {}
+    - name: config-data
+      configMap:
+        name: pipeline-config
