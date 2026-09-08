@@ -1,0 +1,12 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: hello-world
+spec:
+  steps:
+    - name: echo
+      image: registry.redhat.io/ubi8/ubi-minimal:latest
+      command:
+        - echo
+      args:
+        - "Hello World from OpenShift Pipelines!"

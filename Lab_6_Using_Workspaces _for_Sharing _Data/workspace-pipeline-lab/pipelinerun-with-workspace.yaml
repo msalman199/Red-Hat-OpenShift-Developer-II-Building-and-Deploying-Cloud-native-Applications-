@@ -1,0 +1,18 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: workspace-test-run-$(date +%s)
+spec:
+  pipelineRef:
+    name: enhanced-build-pipeline
+  params:
+    - name: git-url
+      value: https://github.com/openshift/nodejs-ex.git
+    - name: git-revision
+      value: main
+    - name: app-name
+      value: nodejs-workspace-demo
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc

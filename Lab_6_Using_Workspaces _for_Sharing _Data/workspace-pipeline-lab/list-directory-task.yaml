@@ -1,0 +1,30 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: list-directory
+spec:
+  description: List contents of workspace directory
+  workspaces:
+    - name: source
+      description: Source code workspace
+      mountPath: /workspace/source
+  steps:
+    - name: list-contents
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "=== Workspace Contents ==="
+        ls -la /workspace/source/
+        echo ""
+        echo "=== File Count ==="
+        find /workspace/source -type f | wc -l
+        echo ""
+        echo "=== Directory Structure ==="
+        tree /workspace/source/ || find /workspace/source -type d
+        echo ""
+        echo "=== Package.json Contents (if exists) ==="
+        if [ -f /workspace/source/package.json ]; then
+          cat /workspace/source/package.json
+        else
+          echo "No package.json found"
+        fi

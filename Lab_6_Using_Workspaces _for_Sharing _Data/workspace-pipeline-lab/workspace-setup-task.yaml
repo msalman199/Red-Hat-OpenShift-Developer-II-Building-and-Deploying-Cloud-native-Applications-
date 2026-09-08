@@ -1,0 +1,54 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: workspace-setup-task
+spec:
+  description: Demonstrate different workspace types
+  workspaces:
+    - name: source
+      description: Persistent source workspace
+      mountPath: /workspace/source
+    - name: temp
+      description: Temporary workspace
+      mountPath: /workspace/temp
+    - name: config
+      description: Configuration workspace
+      mountPath: /workspace/config
+      optional: true
+  steps:
+    - name: explore-workspaces
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        
+        echo "=== Workspace Types Demonstration ==="
+        
+        # Check source workspace (PVC)
+        echo "=== Source Workspace (PVC) ==="
+        echo "Mount point: /workspace/source"
+        df -h /workspace/source
+        echo "Writing to source workspace..."
+        echo "Persistent data from $(date)" > /workspace/source/persistent-file.txt
+        
+        # Check temp workspace (emptyDir)
+        echo "=== Temp Workspace (emptyDir) ==="
+        echo "Mount point: /workspace/temp"
+        df -h /workspace/temp
+        echo "Writing to temp workspace..."
+        echo "Temporary data from $(date)" > /workspace/temp/temp-file.txt
+        
+        # Check config workspace (ConfigMap) if available
+        if [ -d "/workspace/config" ]; then
+          echo "=== Config Workspace (ConfigMap) ==="
+          echo "Mount point: /workspace/config"
+          ls -la /workspace/config/
+          echo "Config contents:"
+          find /workspace/config -type f -exec echo "File: {}" \; -exec cat {} \; 2>/dev/null || echo "No config files found"
+        else
+          echo "=== Config Workspace Not Available ==="
+        fi
+        
+        echo "=== Workspace Summary ==="
+        echo "Source workspace files: $(find /workspace/source -type f 2>/dev/null | wc -l)"
+        echo "Temp workspace files: $(find /workspace/temp -type f 2>/dev/null | wc -l)"
+        echo "Config workspace files: $(find /workspace/config -type f 2>/dev/null | wc -l)"

@@ -1,0 +1,86 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: enhanced-webhook-pipeline
+  namespace: webhook-pipeline-lab
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      description: Git revision to checkout
+      default: main
+    - name: image-name
+      type: string
+      description: Name of the image to build
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: verbose
+          value: "true"
+    - name: list-source
+      runAfter:
+        - fetch-source
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: list-files
+            image: registry.redhat.io/ubi8/ubi:latest
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/bash
+              echo "=== Repository Contents ==="
+              ls -la
+              echo "=== Package.json Contents ==="
+              cat package.json || echo "No package.json found"
+              echo "=== Git Information ==="
+              git log --oneline -5 || echo "No git history available"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - list-source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+        - name: DOCKERFILE
+          value: ./Dockerfile
+        - name: CONTEXT
+          value: .
+    - name: deploy-app
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - build-image
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Deploying application..."
+            oc new-app $(params.image-name) --name=webhook-demo-app || echo "App already exists"
+            oc expose svc/webhook-demo-app || echo "Route already exists"
+            oc set image dc/webhook-demo-app webhook-demo-app=$(params.image-name) || true
+            oc rollout latest dc/webhook-demo-app || true
+            echo "Deployment completed"
