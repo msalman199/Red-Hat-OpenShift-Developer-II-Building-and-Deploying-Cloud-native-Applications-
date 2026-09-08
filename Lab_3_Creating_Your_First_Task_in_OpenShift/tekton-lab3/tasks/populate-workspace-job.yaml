@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: populate-workspace
+spec:
+  template:
+    spec:
+      containers:
+      - name: populate
+        image: registry.access.redhat.com/ubi8/ubi:latest
+        command: ["/bin/bash"]
+        args:
+          - -c
+          - |
+            echo "Populating workspace with sample application..."
+            mkdir -p /workspace/source
+            cd /workspace/source
+            
+            # Create Dockerfile
+            cat > Dockerfile << 'EOF'
+            FROM registry.access.redhat.com/ubi8/ubi:latest
+            
+            RUN yum update -y && \
+                yum install -y httpd && \
+                yum clean all
+            
+            RUN echo '<html><body><h1>Hello from Tekton Task!</h1><p>This image was built using a Tekton Task in OpenShift.</p></body></html>' > /var/www/html/index.html
+            
+            EXPOSE 80
+            
+            CMD ["/usr/sbin/httpd", "-D", "FOREGROUND"]
+            EOF
+            
+            # Create README
+            cat > README.md << 'EOF'
+            # Sample Application
+            This is a simple web application built for demonstrating Tekton Tasks in OpenShift.
+            EOF
+            
+            echo "Workspace populated successfully!"
+            ls -la /workspace/source/
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+      volumes:
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: source-workspace-pvc
+      restartPolicy: Never
+  backoffLimit: 4
