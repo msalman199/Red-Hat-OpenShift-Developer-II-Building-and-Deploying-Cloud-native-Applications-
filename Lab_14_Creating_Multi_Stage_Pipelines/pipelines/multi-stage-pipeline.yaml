@@ -1,0 +1,84 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: multi-stage-app-pipeline
+  namespace: default
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      description: Git revision to build
+      default: main
+    - name: image-name
+      type: string
+      description: Name of the image to build
+    - name: deployment-namespace
+      type: string
+      description: Namespace for deployment
+      default: default
+  
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for pipeline tasks
+    - name: docker-credentials
+      description: Docker registry credentials
+  
+  tasks:
+    # Build Stage
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+    
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+        - name: DOCKERFILE
+          value: ./Dockerfile
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    # Test Stage
+    - name: run-tests
+      taskRef:
+        name: python-test-task
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    # Deploy Stage
+    - name: deploy-to-dev
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - build-image
+        - run-tests
+      params:
+        - name: SCRIPT
+          value: |
+            oc apply -f deploy/deployment.yaml -n $(params.deployment-namespace)
+            oc set image deployment/multi-stage-app app=$(params.image-name) -n $(params.deployment-namespace)
+      workspaces:
+        - name: manifest-dir
+          workspace: shared-workspace

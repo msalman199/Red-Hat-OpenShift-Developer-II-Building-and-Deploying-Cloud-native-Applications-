@@ -1,0 +1,38 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: security-scan-task
+  namespace: default
+spec:
+  description: Perform security scanning on the application
+  workspaces:
+    - name: source
+      description: Source code workspace
+  
+  params:
+    - name: image-name
+      type: string
+      description: Container image to scan
+  
+  steps:
+    - name: dependency-check
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Checking for security vulnerabilities in dependencies..."
+        pip install safety
+        pip install -r src/requirements.txt
+        safety check --json || echo "Security scan completed with warnings"
+    
+    - name: code-analysis
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Performing static code analysis..."
+        pip install bandit
+        bandit -r src/ -f json || echo "Static analysis completed"
+        echo "Security scanning completed!"
