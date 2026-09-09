@@ -1,0 +1,15 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: test-updated-config
+  namespace: secrets-configmaps-lab
+spec:
+  taskRef:
+    name: maven-build-task
+  params:
+    - name: source-url
+      value: "https://github.com/example/updated-app.git"
+  workspaces:
+    - name: source
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc

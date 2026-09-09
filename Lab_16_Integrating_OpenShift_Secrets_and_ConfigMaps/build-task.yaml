@@ -1,0 +1,54 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: maven-build-task
+  namespace: secrets-configmaps-lab
+spec:
+  params:
+    - name: source-url
+      description: Git repository URL
+      default: "https://github.com/example/sample-app.git"
+  workspaces:
+    - name: source
+      description: Workspace for source code
+  steps:
+    - name: build-application
+      image: maven:3.8-openjdk-11
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: MAVEN_GOALS
+          valueFrom:
+            configMapKeyRef:
+              name: build-config
+              key: maven.goals
+        - name: MAVEN_PROFILES
+          valueFrom:
+            configMapKeyRef:
+              name: build-config
+              key: maven.profiles
+        - name: BUILD_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: build-config
+              key: build.timeout
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: app.name
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: app.version
+      script: |
+        #!/bin/bash
+        echo "Building application: $APP_NAME"
+        echo "Version: $APP_VERSION"
+        echo "Maven goals: $MAVEN_GOALS"
+        echo "Maven profiles: $MAVEN_PROFILES"
+        echo "Build timeout: $BUILD_TIMEOUT seconds"
+        
+        # Simulate Maven build
+        echo "Executing: mvn $MAVEN_GOALS -P$MAVEN_PROFILES"
+        echo "Build completed successfully!"

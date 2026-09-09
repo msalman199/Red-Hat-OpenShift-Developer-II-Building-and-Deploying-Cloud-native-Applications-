@@ -1,0 +1,102 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy-task
+  namespace: secrets-configmaps-lab
+spec:
+  params:
+    - name: image-name
+      description: Container image to deploy
+      default: "myapp:latest"
+  steps:
+    - name: deploy-application
+      image: quay.io/openshift/origin-cli:latest
+      env:
+        # From ConfigMaps
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: app.name
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: app.version
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: app.environment
+        - name: DOCKER_REGISTRY
+          valueFrom:
+            configMapKeyRef:
+              name: build-config
+              key: docker.registry
+        # From Secrets
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: username
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: host
+      script: |
+        #!/bin/bash
+        echo "Deploying application: $APP_NAME"
+        echo "Version: $APP_VERSION"
+        echo "Environment: $ENVIRONMENT"
+        echo "Registry: $DOCKER_REGISTRY"
+        echo "Database Host: $DB_HOST"
+        echo "Database User: $DB_USERNAME"
+        
+        # Create deployment YAML
+        cat > deployment.yaml << EOF
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: $APP_NAME
+          labels:
+            app: $APP_NAME
+            version: $APP_VERSION
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: $APP_NAME
+          template:
+            metadata:
+              labels:
+                app: $APP_NAME
+                version: $APP_VERSION
+            spec:
+              containers:
+              - name: $APP_NAME
+                image: $(params.image-name)
+                env:
+                - name: DB_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-credentials
+                      key: host
+                - name: DB_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-credentials
+                      key: username
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-credentials
+                      key: password
+                envFrom:
+                - configMapRef:
+                    name: app-config
+        EOF
+        
+        echo "Deployment configuration created:"
+        cat deployment.yaml
+        echo "Deployment simulation completed!"

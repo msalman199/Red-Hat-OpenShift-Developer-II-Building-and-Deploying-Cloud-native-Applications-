@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: build-config
+  namespace: secrets-configmaps-lab
+data:
+  maven.goals: "clean package"
+  maven.profiles: "production"
+  docker.registry: "quay.io/myorg"
+  docker.tag: "latest"
+  build.timeout: "600"
+  test.skip: "false"
+  sonar.enabled: "true"
+  sonar.host: "https://sonarqube.example.com"

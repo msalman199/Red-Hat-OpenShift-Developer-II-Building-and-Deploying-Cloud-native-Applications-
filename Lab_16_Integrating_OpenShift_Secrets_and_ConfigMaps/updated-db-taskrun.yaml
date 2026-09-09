@@ -1,0 +1,11 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: test-updated-secret
+  namespace: secrets-configmaps-lab
+spec:
+  taskRef:
+    name: database-connection-task
+  params:
+    - name: operation
+      value: "test-new-password"

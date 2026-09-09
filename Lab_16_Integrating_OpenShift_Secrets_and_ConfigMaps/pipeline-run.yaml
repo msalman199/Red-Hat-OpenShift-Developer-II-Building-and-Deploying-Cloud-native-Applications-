@@ -1,0 +1,17 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: secrets-configmaps-run-1788928800
+  namespace: secrets-configmaps-lab
+spec:
+  pipelineRef:
+    name: secrets-configmaps-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/example/sample-app.git"
+    - name: image-name
+      value: "myapp:v1.0.0"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc

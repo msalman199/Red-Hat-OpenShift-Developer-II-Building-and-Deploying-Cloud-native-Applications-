@@ -1,0 +1,11 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: test-db-connection
+  namespace: secrets-configmaps-lab
+spec:
+  taskRef:
+    name: database-connection-task
+  params:
+    - name: operation
+      value: "test-connection"

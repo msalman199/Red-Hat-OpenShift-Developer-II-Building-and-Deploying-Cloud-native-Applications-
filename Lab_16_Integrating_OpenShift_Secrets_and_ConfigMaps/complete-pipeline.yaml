@@ -1,0 +1,53 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: secrets-configmaps-pipeline
+  namespace: secrets-configmaps-lab
+spec:
+  params:
+    - name: git-url
+      description: Git repository URL
+      default: "https://github.com/example/sample-app.git"
+    - name: image-name
+      description: Container image name
+      default: "myapp:latest"
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: database-setup
+      taskRef:
+        name: database-connection-task
+      params:
+        - name: operation
+          value: "setup"
+    
+    - name: build-app
+      taskRef:
+        name: maven-build-task
+      params:
+        - name: source-url
+          value: $(params.git-url)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - database-setup
+    
+    - name: api-integration-test
+      taskRef:
+        name: api-call-task
+      params:
+        - name: endpoint
+          value: "https://api.example.com/health"
+      runAfter:
+        - build-app
+    
+    - name: deploy-application
+      taskRef:
+        name: deploy-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+      runAfter:
+        - api-integration-test

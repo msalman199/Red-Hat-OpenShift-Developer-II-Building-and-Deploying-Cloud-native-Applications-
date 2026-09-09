@@ -1,0 +1,11 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: test-api-call
+  namespace: secrets-configmaps-lab
+spec:
+  taskRef:
+    name: api-call-task
+  params:
+    - name: endpoint
+      value: "https://httpbin.org/get"

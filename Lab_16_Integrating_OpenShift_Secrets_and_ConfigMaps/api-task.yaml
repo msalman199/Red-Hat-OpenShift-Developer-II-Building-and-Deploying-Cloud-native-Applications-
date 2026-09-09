@@ -1,0 +1,28 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: api-call-task
+  namespace: secrets-configmaps-lab
+spec:
+  params:
+    - name: endpoint
+      description: API endpoint to call
+      default: "https://api.example.com/data"
+  steps:
+    - name: make-api-call
+      image: curlimages/curl:latest
+      env:
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-credentials
+              key: api-key
+      script: |
+        #!/bin/sh
+        echo "Making API call to $(params.endpoint)"
+        echo "Using API key: ${API_KEY:0:8}..."
+        
+        # Simulate API call
+        curl -H "Authorization: Bearer $API_KEY" \
+             -H "Content-Type: application/json" \
+             "$(params.endpoint)" || echo "API call simulation completed"
