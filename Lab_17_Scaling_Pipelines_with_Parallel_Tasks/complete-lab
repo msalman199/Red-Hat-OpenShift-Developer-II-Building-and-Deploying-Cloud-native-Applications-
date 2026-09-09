@@ -1,0 +1,549 @@
+Lab 17: Scaling Pipelines with Parallel Tasks
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the concepts of parallel task execution in CI/CD pipelines
+Configure Tekton pipelines to run multiple tasks simultaneously
+Implement conditional logic to control when parallel tasks execute
+Validate and monitor parallel task execution
+Measure and compare pipeline performance to quantify the benefits of parallelization
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Kubernetes concepts (pods, services, deployments)
+Familiarity with YAML syntax and structure
+Previous experience with Tekton Pipelines
+Knowledge of Git version control basics
+Basic command-line interface skills
+This lab assumes access to an OpenShift or Kubernetes cluster with Tekton Pipelines already installed, and that the oc (or kubectl) and tkn CLI tools are available on your workstation. If tkn is not installed, install it with:
+
+# Linux example (adjust for your OS/architecture as needed)
+curl -LO https://github.com/tektoncd/cli/releases/latest/download/tkn_Linux_x86_64.tar.gz
+tar -xzf tkn_Linux_x86_64.tar.gz tkn
+sudo mv tkn /usr/local/bin/
+tkn version
+All work in this lab is performed in an isolated, self-owned practice namespace and is intended purely for learning how parallel CI/CD execution works and how to validate it safely.
+
+Task 1: Understanding Parallel Task Execution
+Subtask 1.1: Review Current Pipeline Structure and Create a Sequential Baseline
+First, we build a basic sequential pipeline to serve as our performance baseline.
+
+Verify your cluster connection:
+oc whoami
+oc project
+Create a new project for this lab:
+oc new-project pipeline-parallel-lab
+Create the custom task definitions used by our pipelines. Each task simulates a real pipeline stage using sleep to represent processing time:
+cat > code-quality-task.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: code-quality-check
+  namespace: pipeline-parallel-lab
+spec:
+  workspaces:
+    - name: source
+      description: Source code workspace
+  steps:
+    - name: quality-check
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Running code quality analysis..."
+        sleep 10
+        echo "Code quality check completed successfully"
+        echo "Quality Score: 85/100"
+EOF
+cat > security-scanner-task.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: security-scanner
+  namespace: pipeline-parallel-lab
+spec:
+  workspaces:
+    - name: source
+      description: Source code workspace
+  steps:
+    - name: security-scan
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Running security vulnerability scan..."
+        sleep 15
+        echo "Security scan completed"
+        echo "No critical vulnerabilities found"
+EOF
+cat > test-runner-task.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: run-tests
+  namespace: pipeline-parallel-lab
+spec:
+  workspaces:
+    - name: source
+      description: Source code workspace
+  steps:
+    - name: unit-tests
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Running unit tests..."
+        sleep 12
+        echo "All tests passed successfully"
+        echo "Test Coverage: 92%"
+EOF
+Apply all task definitions and verify they exist before proceeding:
+oc apply -f code-quality-task.yaml
+oc apply -f security-scanner-task.yaml
+oc apply -f test-runner-task.yaml
+Confirm all three custom tasks were created successfully:
+
+oc get task -n pipeline-parallel-lab
+tkn task list -n pipeline-parallel-lab
+You should see code-quality-check, security-scanner, and run-tests listed by both commands. Do not proceed until all three tasks appear.
+
+Create the sequential pipeline, which runs code analysis, security scanning, and tests one after another using runAfter:
+cat > sequential-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: sequential-build-pipeline
+  namespace: pipeline-parallel-lab
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      default: main
+      description: Git revision to build
+  workspaces:
+    - name: shared-data
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: code-analysis
+      taskRef:
+        name: code-quality-check
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+
+    - name: security-scan
+      taskRef:
+        name: security-scanner
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - code-analysis
+
+    - name: unit-tests
+      taskRef:
+        name: run-tests
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - security-scan
+EOF
+Apply it:
+
+oc apply -f sequential-pipeline.yaml
+Deliverable: oc get task -n pipeline-parallel-lab lists all three custom tasks, and oc get pipeline sequential-build-pipeline -n pipeline-parallel-lab shows the pipeline created successfully.
+
+Subtask 1.2: Run the Sequential Pipeline and Record Baseline Time
+Create and run a PipelineRun:
+cat > sequential-pipelinerun.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: sequential-run-1
+  namespace: pipeline-parallel-lab
+spec:
+  pipelineRef:
+    name: sequential-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/openshift/ruby-hello-world.git"
+    - name: git-revision
+      value: "main"
+  workspaces:
+    - name: shared-data
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+EOF
+oc apply -f sequential-pipelinerun.yaml
+Wait for completion and inspect the result:
+tkn pipelinerun logs sequential-run-1 -f
+tkn pipelinerun describe sequential-run-1
+Record the timing:
+oc get pipelinerun sequential-run-1 -o jsonpath='{.status.startTime}{"\n"}{.status.completionTime}{"\n"}'
+Deliverable: The sequential pipeline reaches Succeeded status. Because code-analysis (10s), security-scan (15s), and unit-tests (12s) run one after another, total task time is roughly 37 seconds plus the git-clone step â you should observe a completion time noticeably longer than the sum of any single task, confirming strictly sequential execution.
+
+Task 2: Implementing Parallel Task Execution with Conditional Logic
+Subtask 2.1: Create a Parallel Pipeline
+Now we modify the pipeline so that code-analysis, security-scan, and unit-tests all run immediately after fetch-source instead of waiting on each other, and we add when expressions to make security scanning and quality checks optional.
+
+cat > parallel-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: parallel-build-pipeline
+  namespace: pipeline-parallel-lab
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      default: main
+      description: Git revision to build
+    - name: enable-security-scan
+      type: string
+      default: "true"
+      description: Enable or disable security scanning
+    - name: enable-quality-check
+      type: string
+      default: "true"
+      description: Enable or disable code quality check
+  workspaces:
+    - name: shared-data
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: code-analysis
+      taskRef:
+        name: code-quality-check
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+      when:
+        - input: "$(params.enable-quality-check)"
+          operator: in
+          values: ["true"]
+
+    - name: security-scan
+      taskRef:
+        name: security-scanner
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+      when:
+        - input: "$(params.enable-security-scan)"
+          operator: in
+          values: ["true"]
+
+    - name: unit-tests
+      taskRef:
+        name: run-tests
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+EOF
+oc apply -f parallel-pipeline.yaml
+Confirm the pipeline is registered:
+
+tkn pipeline list -n pipeline-parallel-lab
+Deliverable: parallel-build-pipeline appears in the tkn pipeline list output.
+
+Subtask 2.2: Execute the Parallel Pipeline and Compare Performance
+Create and run the PipelineRun:
+cat > parallel-pipelinerun.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parallel-run-1
+  namespace: pipeline-parallel-lab
+spec:
+  pipelineRef:
+    name: parallel-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/openshift/ruby-hello-world.git"
+    - name: git-revision
+      value: "main"
+    - name: enable-security-scan
+      value: "true"
+    - name: enable-quality-check
+      value: "true"
+  workspaces:
+    - name: shared-data
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+EOF
+oc apply -f parallel-pipelinerun.yaml
+Monitor the run:
+tkn pipelinerun logs parallel-run-1 -f
+tkn pipelinerun describe parallel-run-1
+Test the conditional logic by disabling the security scan on a second run:
+cat > parallel-pipelinerun-noscan.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parallel-run-2-noscan
+  namespace: pipeline-parallel-lab
+spec:
+  pipelineRef:
+    name: parallel-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/openshift/ruby-hello-world.git"
+    - name: git-revision
+      value: "main"
+    - name: enable-security-scan
+      value: "false"
+    - name: enable-quality-check
+      value: "true"
+  workspaces:
+    - name: shared-data
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+EOF
+oc apply -f parallel-pipelinerun-noscan.yaml
+tkn pipelinerun logs parallel-run-2-noscan -f
+Compare start and completion times for all three runs:
+for run in sequential-run-1 parallel-run-1 parallel-run-2-noscan; do
+  echo "=== $run ==="
+  oc get pipelinerun $run -o jsonpath='{.status.startTime}{"\n"}{.status.completionTime}{"\n"}'
+done
+Deliverable: tkn pipelinerun describe parallel-run-1 shows code-analysis, security-scan, and unit-tests all listed as children of fetch-source rather than of each other. In parallel-run-2-noscan, the pipeline description or oc get taskrun output shows no security-scan TaskRun was created (it was skipped due to the when expression), while code-analysis and unit-tests still ran. The completion time for parallel-run-1 should be noticeably shorter than sequential-run-1, since the longest parallel task (15s security scan) determines the critical path instead of the sum of all three tasks (37s).
+
+Task 3: Validating Parallel Execution and Collecting Performance Metrics
+Subtask 3.1: Build a Task Timing Report
+Rather than eyeballing timestamps, we will script a reusable report that pulls TaskRun start/end times directly from the cluster.
+
+cat > pipeline-timing-report.sh << 'EOF'
+#!/bin/bash
+# Usage: ./pipeline-timing-report.sh <pipelinerun-name> [namespace]
+
+PIPELINERUN_NAME=$1
+NAMESPACE=${2:-pipeline-parallel-lab}
+
+if [ -z "$PIPELINERUN_NAME" ]; then
+    echo "Usage: $0 <pipelinerun-name> [namespace]"
+    exit 1
+fi
+
+echo "=== Timing Report for $PIPELINERUN_NAME ==="
+
+STATUS=$(oc get pipelinerun "$PIPELINERUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.conditions[0].reason}')
+START_TIME=$(oc get pipelinerun "$PIPELINERUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.startTime}')
+COMPLETION_TIME=$(oc get pipelinerun "$PIPELINERUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.completionTime}')
+
+echo "Overall status: $STATUS"
+echo "Started:   $START_TIME"
+echo "Completed: $COMPLETION_TIME"
+
+if [ -n "$START_TIME" ] && [ -n "$COMPLETION_TIME" ]; then
+    START_EPOCH=$(date -d "$START_TIME" +%s)
+    END_EPOCH=$(date -d "$COMPLETION_TIME" +%s)
+    echo "Total pipeline duration: $((END_EPOCH - START_EPOCH)) seconds"
+fi
+
+echo
+echo "Per-task breakdown:"
+echo "--------------------"
+
+# List TaskRuns belonging to this PipelineRun via the tekton.dev/pipelineRun label
+TASK_RUNS=$(oc get taskrun -n "$NAMESPACE" \
+  -l "tekton.dev/pipelineRun=${PIPELINERUN_NAME}" \
+  -o jsonpath='{.items[*].metadata.name}')
+
+for tr in $TASK_RUNS; do
+    TASK_NAME=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.metadata.labels.tekton\.dev/pipelineTask}')
+    TASK_STATUS=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.status.conditions[0].reason}')
+    TASK_START=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.status.startTime}')
+    TASK_END=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.status.completionTime}')
+
+    echo "Task: $TASK_NAME"
+    echo "  Status:    $TASK_STATUS"
+    echo "  Started:   $TASK_START"
+    echo "  Completed: $TASK_END"
+
+    if [ -n "$TASK_START" ] && [ -n "$TASK_END" ]; then
+        TS=$(date -d "$TASK_START" +%s)
+        TE=$(date -d "$TASK_END" +%s)
+        echo "  Duration:  $((TE - TS)) seconds"
+    fi
+    echo
+done
+EOF
+chmod +x pipeline-timing-report.sh
+Run it against the sequential and parallel executions:
+
+./pipeline-timing-report.sh sequential-run-1
+./pipeline-timing-report.sh parallel-run-1
+Deliverable: The script prints a per-task breakdown for each PipelineRun, including status, start time, end time, and duration for fetch-source, code-analysis, security-scan, and unit-tests.
+
+Subtask 3.2: Detect Overlapping (Parallel) Execution
+Use the timestamps captured above to confirm that tasks actually overlapped in the parallel run, rather than just trusting the pipeline structure.
+
+cat > detect-overlap.sh << 'EOF'
+#!/bin/bash
+# Usage: ./detect-overlap.sh <pipelinerun-name> [namespace]
+
+PIPELINERUN_NAME=$1
+NAMESPACE=${2:-pipeline-parallel-lab}
+
+if [ -z "$PIPELINERUN_NAME" ]; then
+    echo "Usage: $0 <pipelinerun-name> [namespace]"
+    exit 1
+fi
+
+TASK_RUNS=$(oc get taskrun -n "$NAMESPACE" \
+  -l "tekton.dev/pipelineRun=${PIPELINERUN_NAME}" \
+  -o jsonpath='{.items[*].metadata.name}')
+
+declare -A starts
+declare -A ends
+names=()
+
+for tr in $TASK_RUNS; do
+    TASK_NAME=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.metadata.labels.tekton\.dev/pipelineTask}')
+    TASK_START=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.status.startTime}')
+    TASK_END=$(oc get taskrun "$tr" -n "$NAMESPACE" -o jsonpath='{.status.completionTime}')
+
+    if [ -n "$TASK_START" ] && [ -n "$TASK_END" ] && [ "$TASK_NAME" != "fetch-source" ]; then
+        starts[$TASK_NAME]=$(date -d "$TASK_START" +%s)
+        ends[$TASK_NAME]=$(date -d "$TASK_END" +%s)
+        names+=("$TASK_NAME")
+    fi
+done
+
+echo "=== Overlap Analysis for $PIPELINERUN_NAME ==="
+found_overlap=false
+
+for ((i=0; i<${#names[@]}; i++)); do
+    for ((j=i+1; j<${#names[@]}; j++)); do
+        t1=${names[$i]}
+        t2=${names[$j]}
+        if [ "${starts[$t1]}" -lt "${ends[$t2]}" ] && [ "${starts[$t2]}" -lt "${ends[$t1]}" ]; then
+            echo "Overlap detected: $t1 and $t2 ran concurrently"
+            found_overlap=true
+        fi
+    done
+done
+
+if [ "$found_overlap" = false ]; then
+    echo "No overlapping task execution detected (tasks ran sequentially)"
+fi
+EOF
+chmod +x detect-overlap.sh
+Run the analysis on both PipelineRuns for comparison:
+
+echo "Sequential pipeline:"
+./detect-overlap.sh sequential-run-1
+
+echo "Parallel pipeline:"
+./detect-overlap.sh parallel-run-1
+Deliverable: detect-overlap.sh sequential-run-1 reports "No overlapping task execution detected." detect-overlap.sh parallel-run-1 reports at least one overlap line (for example, between code-analysis and security-scan, or security-scan and unit-tests), confirming true parallel execution on the cluster.
+
+Subtask 3.3: Summarize Performance Improvement
+Combine the total durations from Subtask 3.1 into a single comparison so the performance gain is quantified rather than just observed.
+
+cat > compare-performance.sh << 'EOF'
+#!/bin/bash
+# Usage: ./compare-performance.sh <sequential-run-name> <parallel-run-name> [namespace]
+
+SEQ_RUN=$1
+PAR_RUN=$2
+NAMESPACE=${3:-pipeline-parallel-lab}
+
+if [ -z "$SEQ_RUN" ] || [ -z "$PAR_RUN" ]; then
+    echo "Usage: $0 <sequential-run-name> <parallel-run-name> [namespace]"
+    exit 1
+fi
+
+get_duration() {
+    local run=$1
+    local start end
+    start=$(oc get pipelinerun "$run" -n "$NAMESPACE" -o jsonpath='{.status.startTime}')
+    end=$(oc get pipelinerun "$run" -n "$NAMESPACE" -o jsonpath='{.status.completionTime}')
+    if [ -n "$start" ] && [ -n "$end" ]; then
+        echo $(( $(date -d "$end" +%s) - $(date -d "$start" +%s) ))
+    else
+        echo "0"
+    fi
+}
+
+SEQ_DURATION=$(get_duration "$SEQ_RUN")
+PAR_DURATION=$(get_duration "$PAR_RUN")
+
+echo "=== Performance Comparison ==="
+echo "Sequential pipeline ($SEQ_RUN): ${SEQ_DURATION}s"
+echo "Parallel pipeline   ($PAR_RUN): ${PAR_DURATION}s"
+
+if [ "$SEQ_DURATION" -gt 0 ] && [ "$PAR_DURATION" -gt 0 ]; then
+    SAVED=$((SEQ_DURATION - PAR_DURATION))
+    PERCENT=$(( (SAVED * 100) / SEQ_DURATION ))
+    echo "Time saved: ${SAVED}s (${PERCENT}% faster)"
+fi
+EOF
+chmod +x compare-performance.sh
+./compare-performance.sh sequential-run-1 parallel-run-1
+Deliverable: The script prints both total durations and a computed percentage improvement. You should see the parallel pipeline complete faster than the sequential one, with the exact percentage depending on cluster scheduling overhead but generally reflecting that the critical path is now the longest single task (the 15-second security scan) plus source fetch, rather than the sum of all three tasks.
+
+Expected Outcomes
+A working sequential Tekton pipeline and a working parallel Tekton pipeline running the same three quality-gate tasks, both validated to reach Succeeded status
+Reusable shell scripts (pipeline-timing-report.sh, detect-overlap.sh, compare-performance.sh) that extract real TaskRun timestamps from the cluster to prove parallel execution occurred and quantify the speed improvement
+A conditional pipeline where the when expression correctly skips the security-scan task based on a parameter value, demonstrating controllable parallel branches
+Troubleshooting
+Symptom: A PipelineRun stays in Running state indefinitely and no TaskRuns for fetch-source appear. Diagnostic hint: Run oc describe pipelinerun <name> and check the workspace PVC binding status with oc get pvc -n pipeline-parallel-lab â a PVC stuck in Pending usually means no default StorageClass is available in the cluster.
+Symptom: detect-overlap.sh reports no overlap even for parallel-run-1. Diagnostic hint: Check cluster node capacity with oc get pods -n pipeline-parallel-lab and look for TaskRun pods stuck in Pending â if the cluster cannot schedule all three task pods simultaneously due to resource limits, they will run one at a time despite the pipeline definition allowing parallelism.
+Conclusion
+In this lab, you built and compared sequential and parallel Tekton pipelines using identical custom tasks, then used when expressions to make specific parallel branches conditional on pipeline parameters. Rather than relying on visual inspection of logs, you wrote scripts that pull real TaskRun timestamps from the cluster to prove that tasks overlapped in execution and to quantify the resulting time savings compared to the sequential baseline. The key takeaway is that parallelization in CI/CD pipelines reduces total execution time by shortening the critical path to the longest concurrent task rather than the sum of all tasks, but this benefit depends on sufficient cluster resources to schedule concurrent pods and on carefully designed when conditions so that conditional branches skip cleanly without breaking downstream task dependencies.
