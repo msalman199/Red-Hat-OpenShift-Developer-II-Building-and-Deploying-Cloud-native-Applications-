@@ -1,0 +1,73 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: parallel-build-pipeline
+  namespace: pipeline-parallel-lab
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      default: main
+      description: Git revision to build
+    - name: enable-security-scan
+      type: string
+      default: "true"
+      description: Enable or disable security scanning
+    - name: enable-quality-check
+      type: string
+      default: "true"
+      description: Enable or disable code quality check
+  workspaces:
+    - name: shared-data
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: code-analysis
+      taskRef:
+        name: code-quality-check
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+      when:
+        - input: "$(params.enable-quality-check)"
+          operator: in
+          values: ["true"]
+
+    - name: security-scan
+      taskRef:
+        name: security-scanner
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
+      when:
+        - input: "$(params.enable-security-scan)"
+          operator: in
+          values: ["true"]
+
+    - name: unit-tests
+      taskRef:
+        name: run-tests
+      workspaces:
+        - name: source
+          workspace: shared-data
+      runAfter:
+        - fetch-source
