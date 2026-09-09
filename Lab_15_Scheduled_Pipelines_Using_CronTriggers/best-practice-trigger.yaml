@@ -1,0 +1,30 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: CronTrigger
+metadata:
+  name: best-practice-trigger
+  labels:
+    app: scheduled-builds
+    environment: development
+    team: platform
+  annotations:
+    description: "Daily development build trigger"
+    owner: "platform-team@company.com"
+    schedule-description: "Runs daily at 3 AM UTC"
+spec:
+  schedule: "0 3 * * *"  # Daily at 3:00 AM UTC
+  pipelineRef:
+    name: scheduled-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/tektoncd/pipeline.git"
+    - name: git-revision
+      value: "develop"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi

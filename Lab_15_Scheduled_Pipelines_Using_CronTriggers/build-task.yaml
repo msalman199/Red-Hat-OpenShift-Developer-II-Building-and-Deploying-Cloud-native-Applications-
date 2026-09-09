@@ -1,0 +1,46 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-and-test
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      default: main
+      description: Git revision to build
+  workspaces:
+    - name: source
+      description: Workspace for source code
+  steps:
+    - name: clone-repository
+      image: alpine/git:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Cloning repository: $(params.git-url)"
+        git clone $(params.git-url) .
+        git checkout $(params.git-revision)
+        echo "Repository cloned successfully"
+        
+    - name: build-application
+      image: node:16-alpine
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Starting build process at $(date)"
+        echo "Simulating application build..."
+        sleep 10
+        echo "Build completed successfully at $(date)"
+        
+    - name: run-tests
+      image: node:16-alpine
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Running tests at $(date)"
+        echo "Simulating test execution..."
+        sleep 5
+        echo "All tests passed at $(date)"
