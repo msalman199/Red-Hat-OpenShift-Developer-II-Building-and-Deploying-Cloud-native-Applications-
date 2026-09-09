@@ -1,0 +1,19 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: security-scanner
+  namespace: pipeline-parallel-lab
+spec:
+  workspaces:
+    - name: source
+      description: Source code workspace
+  steps:
+    - name: security-scan
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "Running security vulnerability scan..."
+        sleep 15
+        echo "Security scan completed"
+        echo "No critical vulnerabilities found"
