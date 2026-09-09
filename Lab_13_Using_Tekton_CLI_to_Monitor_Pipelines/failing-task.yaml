@@ -1,0 +1,25 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: failing-task
+spec:
+  steps:
+    - name: success-step
+      image: ubuntu
+      command:
+        - echo
+      args:
+        - "This step will succeed"
+    - name: long-running-step
+      image: ubuntu
+      command:
+        - sleep
+      args:
+        - "60"
+    - name: failing-step
+      image: ubuntu
+      command:
+        - sh
+        - -c
+      args:
+        - "echo 'About to fail' && exit 1"
