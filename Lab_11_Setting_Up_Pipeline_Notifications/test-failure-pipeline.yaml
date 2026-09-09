@@ -1,0 +1,41 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: test-failure-pipeline
+  namespace: pipeline-notifications
+spec:
+  tasks:
+    - name: intentional-failure
+      taskRef:
+        name: failing-task
+  
+  finally:
+    - name: notify-success
+      taskRef:
+        name: slack-notification
+      when:
+        - input: $(tasks.status)
+          operator: in
+          values: ["Succeeded"]
+      params:
+        - name: message
+          value: "Test pipeline completed successfully!"
+        - name: status
+          value: "success"
+        - name: pipeline-name
+          value: "$(context.pipeline.name)"
+    
+    - name: notify-failure
+      taskRef:
+        name: slack-notification
+      when:
+        - input: $(tasks.status)
+          operator: in
+          values: ["Failed"]
+      params:
+        - name: message
+          value: "Test pipeline failed as expected!"
+        - name: status
+          value: "failure"
+        - name: pipeline-name
+          value: "$(context.pipeline.name)"
