@@ -1,0 +1,58 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: simple-build-pipeline
+  namespace: default
+spec:
+  description: "A simple pipeline that builds an application"
+  params:
+    - name: app-name
+      description: "Name of the application to build"
+      type: string
+      default: "sample-app"
+    - name: app-version
+      description: "Version tag for the application"
+      type: string
+      default: "v1.0.0"
+    - name: git-url
+      description: "Git repository URL"
+      type: string
+      default: "https://github.com/tektoncd/pipeline.git"
+  workspaces:
+    - name: shared-data
+      description: "Shared workspace for pipeline tasks"
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: "main"
+      workspaces:
+        - name: output
+          workspace: shared-data
+    - name: build-application
+      taskRef:
+        name: build-app
+      runAfter:
+        - fetch-source
+      params:
+        - name: image-name
+          value: $(params.app-name)
+        - name: image-tag
+          value: $(params.app-version)
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: display-results
+      taskRef:
+        name: echo-hello
+        kind: ClusterTask
+      runAfter:
+        - build-application
+      params:
+        - name: echo-message
+          value: "Pipeline completed! Built $(params.app-name):$(params.app-version)"

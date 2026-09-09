@@ -1,0 +1,87 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-docker-image
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.17.0"
+    tekton.dev/categories: Image Build
+    tekton.dev/tags: image-build, docker
+    tekton.dev/displayName: "Build Docker Image"
+    tekton.dev/platforms: "linux/amd64"
+spec:
+  description: >-
+    This task builds a Docker container image using Buildah.
+    It demonstrates the basic structure of a Tekton task for image building.
+  
+  params:
+    - name: IMAGE
+      description: Reference of the image to build
+      type: string
+      default: "image-registry.openshift-image-registry.svc:5000/$(context.taskRun.namespace)/sample-app:latest"
+    
+    - name: DOCKERFILE
+      description: Path to the Dockerfile to build
+      type: string
+      default: "./Dockerfile"
+    
+    - name: CONTEXT
+      description: The build context used by Buildah
+      type: string
+      default: "."
+    
+    - name: TLSVERIFY
+      description: Verify the TLS on the registry endpoint
+      type: string
+      default: "false"
+
+  workspaces:
+    - name: source
+      description: Workspace containing the source code to build
+      mountPath: /workspace/source
+
+  steps:
+    - name: build-and-push
+      image: registry.redhat.io/ubi8/buildah:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env bash
+        set -e
+        
+        echo "Starting image build process..."
+        echo "Building image: $(params.IMAGE)"
+        echo "Using Dockerfile: $(params.DOCKERFILE)"
+        echo "Build context: $(params.CONTEXT)"
+        
+        # Build the container image
+        buildah bud \
+          --format=oci \
+          --tls-verify=$(params.TLSVERIFY) \
+          --no-cache \
+          -f $(params.DOCKERFILE) \
+          -t $(params.IMAGE) \
+          $(params.CONTEXT)
+        
+        echo "Image built successfully!"
+        
+        # Push the image to registry
+        echo "Pushing image to registry..."
+        buildah push \
+          --tls-verify=$(params.TLSVERIFY) \
+          $(params.IMAGE) \
+          docker://$(params.IMAGE)
+        
+        echo "Image pushed successfully!"
+        echo "Build process completed."
+      
+      securityContext:
+        privileged: true
+      
+      volumeMounts:
+        - name: varlibcontainers
+          mountPath: /var/lib/containers
+
+  volumes:
+    - name: varlibcontainers
+      emptyDir: {}

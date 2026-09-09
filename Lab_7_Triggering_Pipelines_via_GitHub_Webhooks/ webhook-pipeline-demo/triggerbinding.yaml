@@ -1,0 +1,13 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: github-push-binding
+  namespace: webhook-pipeline-lab
+spec:
+  params:
+    - name: git-url
+      value: $(body.repository.clone_url)
+    - name: git-revision
+      value: $(body.head_commit.id)
+    - name: image-name
+      value: image-registry.openshift-image-registry.svc:5000/webhook-pipeline-lab/webhook-demo-app:$(body.head_commit.id)

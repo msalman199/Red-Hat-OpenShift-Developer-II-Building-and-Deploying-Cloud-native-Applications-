@@ -1,0 +1,60 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: validated-parameterized-pipeline
+spec:
+  params:
+    - name: image-tag
+      type: string
+      description: Tag for the container image (must follow semantic versioning)
+      default: "v1.0.0"
+    - name: environment
+      type: string
+      description: Target environment (dev, staging, prod)
+      default: "dev"
+    - name: replicas
+      type: string
+      description: Number of replicas (1-10)
+      default: "1"
+  tasks:
+    - name: validate-parameters
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Validating parameters..."
+            
+            # Validate image tag format
+            if [[ ! "$(params.image-tag)" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Error: image-tag must follow semantic versioning (e.g., v1.0.0)"
+              exit 1
+            fi
+            
+            # Validate environment
+            if [[ ! "$(params.environment)" =~ ^(dev|staging|prod)$ ]]; then
+              echo "Error: environment must be dev, staging, or prod"
+              exit 1
+            fi
+            
+            # Validate replicas
+            if [[ $(params.replicas) -lt 1 || $(params.replicas) -gt 10 ]]; then
+              echo "Error: replicas must be between 1 and 10"
+              exit 1
+            fi
+            
+            echo "All parameters are valid!"
+    - name: display-config
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - validate-parameters
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Pipeline Configuration:"
+            echo "Image Tag: $(params.image-tag)"
+            echo "Environment: $(params.environment)"
+            echo "Replicas: $(params.replicas)"

@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parameterized-run-custom
+spec:
+  pipelineRef:
+    name: parameterized-build-deploy
+  params:
+    - name: git-url
+      value: "https://github.com/your-username/custom-app.git"
+    - name: git-revision
+      value: "develop"
+    - name: image-name
+      value: "custom-application"
+    - name: image-tag
+      value: "v1.2.3"
+    - name: deployment-name
+      value: "custom-app-deployment"
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc

@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-clone-task
+  namespace: default
+spec:
+  resources:
+    inputs:
+      - name: source-repo
+        type: git
+  steps:
+    - name: list-source-files
+      image: alpine/git:latest
+      workingDir: /workspace/source-repo
+      script: |
+        #!/bin/sh
+        echo "=== Source Code Repository Contents ==="
+        ls -la
+        echo ""
+        echo "=== Git Information ==="
+        git log --oneline -5
+        echo ""
+        echo "=== Repository Status ==="
+        git status
