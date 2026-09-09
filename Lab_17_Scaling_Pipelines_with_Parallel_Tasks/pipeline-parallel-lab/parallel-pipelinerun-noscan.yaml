@@ -1,0 +1,26 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parallel-run-2-noscan
+  namespace: pipeline-parallel-lab
+spec:
+  pipelineRef:
+    name: parallel-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/openshift/ruby-hello-world.git"
+    - name: git-revision
+      value: "main"
+    - name: enable-security-scan
+      value: "false"
+    - name: enable-quality-check
+      value: "true"
+  workspaces:
+    - name: shared-data
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
