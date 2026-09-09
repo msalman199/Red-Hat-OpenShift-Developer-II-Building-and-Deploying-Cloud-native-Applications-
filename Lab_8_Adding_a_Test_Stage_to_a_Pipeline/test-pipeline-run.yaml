@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: build-test-deploy-run-$(date +%s)
+  generateName: build-test-deploy-run-
+spec:
+  pipelineRef:
+    name: build-test-deploy-pipeline
+  params:
+    - name: repo-url
+      value: "https://github.com/your-username/sample-app.git"
+    - name: image-reference
+      value: "image-registry.openshift-image-registry.svc:5000/default/test-app:latest"
+    - name: deployment-name
+      value: "test-app"
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-shared-data
+    - name: docker-credentials
+      secret:
+        secretName: docker-credentials

@@ -1,0 +1,76 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: enhanced-build-pipeline
+spec:
+  description: Enhanced pipeline demonstrating comprehensive workspace usage
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: https://github.com/openshift/nodejs-ex.git
+    - name: git-revision
+      type: string
+      description: Git revision to checkout
+      default: main
+    - name: app-name
+      type: string
+      description: Application name
+      default: nodejs-workspace-app
+  workspaces:
+    - name: shared-data
+      description: Workspace for sharing data between all tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: deleteExisting
+          value: "true"
+      workspaces:
+        - name: output
+          workspace: shared-data
+    
+    - name: list-source
+      taskRef:
+        name: list-directory
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+    
+    - name: create-artifacts
+      taskRef:
+        name: create-build-artifacts
+      runAfter:
+        - list-source
+      params:
+        - name: app-name
+          value: $(params.app-name)
+      workspaces:
+        - name: source
+          workspace: shared-data
+    
+    - name: process-artifacts
+      taskRef:
+        name: process-build-artifacts
+      runAfter:
+        - create-artifacts
+      workspaces:
+        - name: source
+          workspace: shared-data
+    
+    - name: final-verification
+      taskRef:
+        name: verify-workspace-data
+      runAfter:
+        - process-artifacts
+      workspaces:
+        - name: source
+          workspace: shared-data

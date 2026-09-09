@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: workspace-debug-pod
+spec:
+  containers:
+  - name: debug
+    image: registry.redhat.io/ubi8/ubi:latest
+    command: ["/bin/bash"]
+    args: ["-c", "sleep 3600"]
+    volumeMounts:
+    - name: workspace-volume
+      mountPath: /debug-workspace
+  volumes:
+  - name: workspace-volume
+    persistentVolumeClaim:
+      claimName: pipeline-workspace-pvc
+  restartPolicy: Never

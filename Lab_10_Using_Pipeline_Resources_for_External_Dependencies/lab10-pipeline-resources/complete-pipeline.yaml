@@ -1,0 +1,32 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: source-to-image-pipeline
+  namespace: default
+spec:
+  resources:
+    - name: app-source
+      type: git
+    - name: app-image
+      type: image
+  tasks:
+    - name: clone-source
+      taskRef:
+        name: git-clone-task
+      resources:
+        inputs:
+          - name: source-repo
+            resource: app-source
+    
+    - name: build-and-push-image
+      taskRef:
+        name: build-push-task
+      runAfter:
+        - clone-source
+      resources:
+        inputs:
+          - name: source-repo
+            resource: app-source
+        outputs:
+          - name: built-image
+            resource: app-image
