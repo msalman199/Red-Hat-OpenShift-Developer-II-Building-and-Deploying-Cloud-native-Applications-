@@ -1,0 +1,86 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: build-test-deploy-pipeline
+  labels:
+    app.kubernetes.io/version: "0.1"
+spec:
+  description: >-
+    Pipeline that builds, tests, and deploys the application
+  params:
+    - name: repo-url
+      type: string
+      description: The git repository URL to clone from
+    - name: image-reference
+      type: string
+      description: The container image reference to build
+    - name: deployment-name
+      type: string
+      description: The name of the deployment
+      default: "my-app"
+  workspaces:
+    - name: shared-data
+      description: Workspace shared between tasks
+    - name: docker-credentials
+      description: Docker registry credentials
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: "main"
+    
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: IMAGE
+          value: $(params.image-reference)
+        - name: DOCKERFILE
+          value: "./Dockerfile"
+    
+    - name: run-tests
+      taskRef:
+        name: run-tests
+      runAfter:
+        - build-image
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: image-url
+          value: $(params.image-reference)
+        - name: test-command
+          value: "npm test"
+    
+    - name: deploy-application
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - run-tests
+      workspaces:
+        - name: manifest-dir
+          workspace: shared-data
+      params:
+        - name: SCRIPT
+          value: |
+            oc apply -f k8s/
+            oc set image deployment/$(params.deployment-name) \
+              app=$(params.image-reference)
+            oc rollout status deployment/$(params.deployment-name)

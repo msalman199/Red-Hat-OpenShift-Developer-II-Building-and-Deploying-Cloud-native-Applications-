@@ -1,0 +1,81 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: sample-app-pipeline
+  namespace: pipeline-notifications
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: "https://github.com/openshift/nodejs-ex.git"
+    - name: git-revision
+      type: string
+      description: Git revision to build
+      default: "main"
+    - name: image-name
+      type: string
+      description: Name of the image to build
+      default: "sample-app"
+  workspaces:
+    - name: shared-data
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+    
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: IMAGE
+          value: "image-registry.openshift-image-registry.svc:5000/$(context.pipelineRun.namespace)/$(params.image-name):latest"
+        - name: DOCKERFILE
+          value: "./Dockerfile"
+  
+  finally:
+    - name: notify-success
+      taskRef:
+        name: slack-notification
+      when:
+        - input: $(tasks.status)
+          operator: in
+          values: ["Succeeded"]
+      params:
+        - name: message
+          value: "Pipeline completed successfully! Image $(params.image-name) has been built and pushed."
+        - name: status
+          value: "success"
+        - name: pipeline-name
+          value: "$(context.pipeline.name)"
+    
+    - name: notify-failure
+      taskRef:
+        name: slack-notification
+      when:
+        - input: $(tasks.status)
+          operator: in
+          values: ["Failed"]
+      params:
+        - name: message
+          value: "Pipeline failed! Please check the logs for more details."
+        - name: status
+          value: "failure"
+        - name: pipeline-name
+          value: "$(context.pipeline.name)"

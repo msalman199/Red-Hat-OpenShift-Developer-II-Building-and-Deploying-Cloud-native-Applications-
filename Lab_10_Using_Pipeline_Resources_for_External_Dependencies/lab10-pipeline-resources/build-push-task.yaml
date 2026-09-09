@@ -1,0 +1,39 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-push-task
+  namespace: default
+spec:
+  resources:
+    inputs:
+      - name: source-repo
+        type: git
+    outputs:
+      - name: built-image
+        type: image
+  steps:
+    - name: create-dockerfile
+      image: alpine:latest
+      workingDir: /workspace/source-repo
+      script: |
+        #!/bin/sh
+        echo "=== Creating Simple Dockerfile ==="
+        cat > Dockerfile << 'DOCKERFILE_EOF'
+        FROM nginx:alpine
+        COPY . /usr/share/nginx/html/
+        EXPOSE 80
+        CMD ["nginx", "-g", "daemon off;"]
+        DOCKERFILE_EOF
+        echo "Dockerfile created:"
+        cat Dockerfile
+    
+    - name: build-and-push
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - --dockerfile=/workspace/source-repo/Dockerfile
+        - --context=/workspace/source-repo
+        - --destination=$(resources.outputs.built-image.url)
+        - --skip-tls-verify
+      env:
+        - name: DOCKER_CONFIG
+          value: /tekton/home/.docker

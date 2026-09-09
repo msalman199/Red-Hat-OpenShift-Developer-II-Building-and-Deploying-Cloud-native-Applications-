@@ -1,0 +1,19 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: simple-build-pipeline-run-001
+  namespace: default
+spec:
+  pipelineRef:
+    name: simple-build-pipeline
+  params:
+    - name: app-name
+      value: "yaml-triggered-app"
+    - name: app-version
+      value: "v3.0.0"
+    - name: git-url
+      value: "https://github.com/tektoncd/pipeline.git"
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc
