@@ -1,0 +1,18 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: corrected-task
+spec:
+  steps:
+    - name: success-step
+      image: ubuntu
+      command:
+        - echo
+      args:
+        - "This step will succeed"
+    - name: another-success-step
+      image: ubuntu
+      command:
+        - echo
+      args:
+        - "This step will also succeed"

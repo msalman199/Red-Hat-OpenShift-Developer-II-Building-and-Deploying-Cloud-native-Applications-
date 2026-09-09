@@ -1,0 +1,12 @@
+[2026-09-09 02:27:11] BLUE-GREEN: Deploying version 1.0.0 to blue environment on port 5001
+[2026-09-09 02:27:21] BLUE-GREEN: Health check failed for blue environment, leaving traffic unchanged
+[2026-09-09 02:27:21] BLUE-GREEN: === BLUE-GREEN DEPLOYMENT FAILED: traffic remains on none ===
+[2026-09-09 02:27:25] BLUE-GREEN: Deploying version 1.1.0 to blue environment on port 5001
+[2026-09-09 02:27:35] BLUE-GREEN: Health check failed for blue environment, leaving traffic unchanged
+[2026-09-09 02:27:35] BLUE-GREEN: === BLUE-GREEN DEPLOYMENT FAILED: traffic remains on none ===
+[2026-09-09 02:27:47] BLUE-GREEN: Deploying version 2.0.0 to blue environment on port 5001
+[2026-09-09 02:27:58] BLUE-GREEN: Health check failed for blue environment, leaving traffic unchanged
+[2026-09-09 02:27:58] BLUE-GREEN: === BLUE-GREEN DEPLOYMENT FAILED: traffic remains on none ===
+[2026-09-09 02:28:04] BLUE-GREEN: Rolling back traffic from none to blue
+[2026-09-09 02:28:14] BLUE-GREEN: Rollback failed: blue environment is not healthy
+[2026-09-09 02:28:14] BLUE-GREEN: === ROLLBACK FAILED ===

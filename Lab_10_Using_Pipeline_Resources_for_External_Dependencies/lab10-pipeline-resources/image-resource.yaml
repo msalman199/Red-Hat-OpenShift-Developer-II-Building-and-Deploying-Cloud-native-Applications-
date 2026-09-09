@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineResource
+metadata:
+  name: built-image
+  namespace: default
+spec:
+  type: image
+  params:
+    - name: url
+      value: docker.io/your-username/sample-app:latest

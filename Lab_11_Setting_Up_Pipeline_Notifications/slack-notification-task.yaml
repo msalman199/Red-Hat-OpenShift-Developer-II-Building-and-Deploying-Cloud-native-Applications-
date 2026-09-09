@@ -1,0 +1,74 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: slack-notification
+  namespace: pipeline-notifications
+spec:
+  params:
+    - name: message
+      type: string
+      description: The message to send to Slack
+    - name: status
+      type: string
+      description: Pipeline status (success/failure)
+      default: "success"
+    - name: pipeline-name
+      type: string
+      description: Name of the pipeline
+      default: "unknown"
+  steps:
+    - name: send-notification
+      image: curlimages/curl:latest
+      env:
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: slack-webhook
+              key: url
+      script: |
+        #!/bin/sh
+        
+        # Set color based on status
+        if [ "$(params.status)" = "success" ]; then
+          COLOR="good"
+          EMOJI=":white_check_mark:"
+        else
+          COLOR="danger"
+          EMOJI=":x:"
+        fi
+        
+        # Create JSON payload
+        PAYLOAD=$(cat <<JSON
+        {
+          "attachments": [
+            {
+              "color": "${COLOR}",
+              "fields": [
+                {
+                  "title": "Pipeline Status",
+                  "value": "${EMOJI} $(params.status)",
+                  "short": true
+                },
+                {
+                  "title": "Pipeline Name",
+                  "value": "$(params.pipeline-name)",
+                  "short": true
+                },
+                {
+                  "title": "Message",
+                  "value": "$(params.message)",
+                  "short": false
+                }
+              ]
+            }
+          ]
+        }
+JSON
+        )
+        
+        # Send notification to Slack
+        curl -X POST -H 'Content-type: application/json' \
+          --data "${PAYLOAD}" \
+          "${SLACK_WEBHOOK_URL}"
+        
+        echo "Notification sent to Slack"

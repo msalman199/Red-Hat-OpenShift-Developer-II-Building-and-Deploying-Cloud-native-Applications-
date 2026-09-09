@@ -1,0 +1,16 @@
+[2026-09-09 02:24:09] PIPELINE: === STARTING PIPELINE: version=1.0.0 fail_health=false ===
+[2026-09-09 02:24:09] PIPELINE: === BUILD STAGE: version 1.0.0 ===
+ERROR: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+[2026-09-09 02:24:14] PIPELINE: Pipeline failed at build stage
+[2026-09-09 02:25:48] PIPELINE: === STARTING PIPELINE: version=1.0.0 fail_health=false ===
+[2026-09-09 02:25:48] PIPELINE: === BUILD STAGE: version 1.0.0 ===
+ERROR: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+[2026-09-09 02:25:48] PIPELINE: Pipeline failed at build stage
+[2026-09-09 02:26:19] PIPELINE: === STARTING PIPELINE: version=1.1.0 fail_health=false ===
+[2026-09-09 02:26:19] PIPELINE: === BUILD STAGE: version 1.1.0 ===
+ERROR: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+[2026-09-09 02:26:19] PIPELINE: Pipeline failed at build stage
+[2026-09-09 02:26:33] PIPELINE: === STARTING PIPELINE: version=2.0.0 fail_health=true ===
+[2026-09-09 02:26:33] PIPELINE: === BUILD STAGE: version 2.0.0 ===
+ERROR: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+[2026-09-09 02:26:34] PIPELINE: Pipeline failed at build stage

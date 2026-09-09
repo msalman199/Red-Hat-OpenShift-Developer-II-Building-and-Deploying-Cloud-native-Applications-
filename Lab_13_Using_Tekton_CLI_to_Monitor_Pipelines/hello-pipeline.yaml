@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: hello-world-pipeline
+spec:
+  params:
+    - name: greeting
+      type: string
+      default: "Hello from Pipeline"
+  tasks:
+    - name: hello-task-1
+      taskRef:
+        name: hello-world-task
+      params:
+        - name: message
+          value: "$(params.greeting) - Task 1"
+    - name: hello-task-2
+      taskRef:
+        name: hello-world-task
+      params:
+        - name: message
+          value: "$(params.greeting) - Task 2"
+      runAfter:
+        - hello-task-1

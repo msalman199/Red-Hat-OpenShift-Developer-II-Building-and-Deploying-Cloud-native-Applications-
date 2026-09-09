@@ -1,0 +1,9 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: failing-pipeline
+spec:
+  tasks:
+    - name: failing-task
+      taskRef:
+        name: failing-task

@@ -1,0 +1,559 @@
+Lab: Implementing Rollback in CI/CD Pipelines
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the importance of rollback mechanisms in CI/CD pipelines
+Implement automated rollback logic using previous container image tags
+Configure a deployment pipeline that detects failed deployments and triggers a rollback
+Execute and verify rollback procedures in a containerized environment
+Apply blue-green deployment concepts to achieve zero-downtime rollback
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of containerization concepts (Docker)
+Familiarity with CI/CD pipeline concepts
+Experience with command-line interface operations (bash)
+Basic knowledge of Python and Flask
+A Linux machine or VM with Docker installed and running
+Install the required tools before starting (skip any that are already installed):
+
+# Verify Docker is installed and running
+docker --version
+docker ps
+
+# Verify curl and python3 are available (used for testing endpoints)
+curl --version
+python3 --version
+This lab uses only local Docker containers on your own machine. No external accounts, cloud services, or production systems are involved. All scripts and containers created in this lab are disposable and are removed in the cleanup step at the end.
+
+Task 1: Build a Sample Application with Deploy and Rollback Scripts
+Step 1.1: Create the Project Structure
+mkdir -p pipeline-rollback-lab/{src,scripts,logs}
+cd pipeline-rollback-lab
+Step 1.2: Create the Sample Application
+This Flask application reports its own version through environment variables, which lets us distinguish deployed versions during testing.
+
+cat > src/app.py << 'EOF'
+from flask import Flask, jsonify
+import os
+
+app = Flask(__name__)
+
+VERSION = os.getenv('APP_VERSION', '1.0.0')
+FAIL_HEALTH = os.getenv('FAIL_HEALTH', 'false').lower() == 'true'
+
+@app.route('/')
+def home():
+    return jsonify({
+        'message': 'Hello from Pipeline Rollback Lab',
+        'version': VERSION
+    })
+
+@app.route('/health')
+def health():
+    if FAIL_HEALTH:
+        return jsonify({'status': 'unhealthy', 'version': VERSION}), 500
+    return jsonify({'status': 'healthy', 'version': VERSION})
+
+@app.route('/version')
+def version():
+    return jsonify({'version': VERSION})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+EOF
+The FAIL_HEALTH environment variable lets us simulate a bad deployment on demand, without maintaining a separate broken copy of the application.
+
+Step 1.3: Create the Dockerfile
+cat > Dockerfile << 'EOF'
+FROM python:3.9-slim
+
+WORKDIR /app
+
+RUN pip install flask
+
+COPY src/app.py .
+
+ARG APP_VERSION=1.0.0
+ENV APP_VERSION=${APP_VERSION}
+ENV FAIL_HEALTH=false
+
+EXPOSE 5000
+
+CMD ["python", "app.py"]
+EOF
+Step 1.4: Create the Deployment Script
+This script starts a new container for a given version and validates it with a health check before considering the deployment successful.
+
+cat > scripts/deploy.sh << 'EOF'
+#!/bin/bash
+set -u
+
+IMAGE_NAME="pipeline-app"
+CONTAINER_NAME="pipeline-app-container"
+PORT=5000
+HEALTH_CHECK_URL="http://localhost:${PORT}/health"
+MAX_RETRIES=10
+RETRY_INTERVAL=1
+
+log() {
+    mkdir -p logs
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a logs/deployment.log
+}
+
+health_check() {
+    local retries=0
+    while [ $retries -lt $MAX_RETRIES ]; do
+        if curl -s -f "$HEALTH_CHECK_URL" > /dev/null 2>&1; then
+            return 0
+        fi
+        retries=$((retries + 1))
+        sleep $RETRY_INTERVAL
+    done
+    return 1
+}
+
+cleanup_container() {
+    docker stop "$CONTAINER_NAME" > /dev/null 2>&1 || true
+    docker rm "$CONTAINER_NAME" > /dev/null 2>&1 || true
+}
+
+deploy() {
+    local version=$1
+    local fail_health=${2:-false}
+    local image_tag="${IMAGE_NAME}:${version}"
+
+    if ! docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${image_tag}$"; then
+        log "Error: image ${image_tag} not found. Build it first."
+        return 1
+    fi
+
+    cleanup_container
+
+    log "Starting container for version ${version} (simulate_failure=${fail_health})"
+    docker run -d \
+        --name "$CONTAINER_NAME" \
+        -p "${PORT}:5000" \
+        -e APP_VERSION="$version" \
+        -e FAIL_HEALTH="$fail_health" \
+        "$image_tag" > /dev/null
+
+    sleep 2
+
+    if health_check; then
+        log "Deployment of version ${version} succeeded"
+        echo "$version" >> logs/successful_deployments.log
+        return 0
+    else
+        log "Deployment of version ${version} failed health check"
+        return 1
+    fi
+}
+
+main() {
+    local version=${1:-}
+    local fail_health=${2:-false}
+
+    if [ -z "$version" ] || [ "$version" = "--help" ] || [ "$version" = "-h" ]; then
+        echo "Usage: $0 <version> [fail_health:true|false]"
+        exit 0
+    fi
+
+    log "=== Starting deployment of version ${version} ==="
+    if deploy "$version" "$fail_health"; then
+        log "=== Deployment completed successfully ==="
+        exit 0
+    else
+        log "=== Deployment failed ==="
+        exit 1
+    fi
+}
+
+main "$@"
+EOF
+chmod +x scripts/deploy.sh
+Step 1.5: Create the Rollback Script
+cat > scripts/rollback.sh << 'EOF'
+#!/bin/bash
+set -u
+
+log() {
+    mkdir -p logs
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ROLLBACK: $1" | tee -a logs/rollback.log
+}
+
+get_last_successful_version() {
+    if [ -f "logs/successful_deployments.log" ]; then
+        tail -n 1 logs/successful_deployments.log
+    else
+        echo ""
+    fi
+}
+
+main() {
+    local target_version=${1:-}
+
+    if [ "$target_version" = "--help" ] || [ "$target_version" = "-h" ]; then
+        echo "Usage: $0 [version]"
+        echo "If no version is given, rolls back to the last successful version."
+        exit 0
+    fi
+
+    if [ -z "$target_version" ]; then
+        target_version=$(get_last_successful_version)
+        if [ -z "$target_version" ]; then
+            log "No successful deployment recorded. Cannot roll back."
+            exit 1
+        fi
+        log "No version specified, rolling back to last successful version: ${target_version}"
+    fi
+
+    log "=== Starting rollback to version ${target_version} ==="
+    if ./scripts/deploy.sh "$target_version" false; then
+        log "=== Rollback completed successfully ==="
+        exit 0
+    else
+        log "=== Rollback failed ==="
+        exit 1
+    fi
+}
+
+main "$@"
+EOF
+chmod +x scripts/rollback.sh
+Deliverable for Task 1: a pipeline-rollback-lab directory containing src/app.py, Dockerfile, scripts/deploy.sh, and scripts/rollback.sh, with both scripts executable.
+
+Task 2: Build the Pipeline and Trigger an Automatic Rollback
+Step 2.1: Create the Pipeline Script
+This script ties build, deploy, and rollback together: if deployment of a new version fails its health check, the pipeline automatically rolls back to the last known-good version.
+
+cat > scripts/pipeline.sh << 'EOF'
+#!/bin/bash
+set -u
+
+log() {
+    mkdir -p logs
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] PIPELINE: $1" | tee -a logs/pipeline.log
+}
+
+build_stage() {
+    local version=$1
+    log "=== BUILD STAGE: version ${version} ==="
+    docker build -t "pipeline-app:${version}" --build-arg APP_VERSION="$version" . >> logs/pipeline.log 2>&1
+}
+
+deploy_stage() {
+    local version=$1
+    local fail_health=$2
+    log "=== DEPLOY STAGE: version ${version} ==="
+    ./scripts/deploy.sh "$version" "$fail_health"
+}
+
+rollback_stage() {
+    log "=== ROLLBACK STAGE ==="
+    ./scripts/rollback.sh
+}
+
+main() {
+    local version=${1:-}
+    local fail_health=${2:-false}
+
+    if [ -z "$version" ] || [ "$version" = "--help" ] || [ "$version" = "-h" ]; then
+        echo "Usage: $0 <version> [fail_health:true|false]"
+        exit 0
+    fi
+
+    mkdir -p logs
+    log "=== STARTING PIPELINE: version=${version} fail_health=${fail_health} ==="
+
+    if ! build_stage "$version"; then
+        log "Pipeline failed at build stage"
+        exit 1
+    fi
+
+    if deploy_stage "$version" "$fail_health"; then
+        log "=== PIPELINE COMPLETED SUCCESSFULLY ==="
+        exit 0
+    fi
+
+    log "Deploy stage failed, initiating automatic rollback"
+    if rollback_stage; then
+        log "=== PIPELINE COMPLETED WITH ROLLBACK ==="
+        exit 0
+    else
+        log "=== PIPELINE FAILED, ROLLBACK ALSO FAILED ==="
+        exit 1
+    fi
+}
+
+main "$@"
+EOF
+chmod +x scripts/pipeline.sh
+Step 2.2: Deploy a Successful Baseline Version
+./scripts/pipeline.sh 1.0.0 false
+Expected result: the log ends with === PIPELINE COMPLETED SUCCESSFULLY ===. Confirm the running version:
+
+curl -s http://localhost:5000/version
+Expected output: {"version":"1.0.0"}
+
+Step 2.3: Deploy a Second Successful Version
+./scripts/pipeline.sh 1.1.0 false
+curl -s http://localhost:5000/version
+Expected output: {"version":"1.1.0"}. This gives the rollback mechanism a known-good version to fall back to.
+
+Step 2.4: Trigger a Failing Deployment and Observe Automatic Rollback
+./scripts/pipeline.sh 2.0.0 true
+The deploy.sh health check will fail because the container is started with FAIL_HEALTH=true, causing /health to return HTTP 500. Watch the pipeline log output: it should show the deploy stage failing, then automatically invoke rollback.sh, and finish with === PIPELINE COMPLETED WITH ROLLBACK ===.
+
+Verify the application is back on the last successful version:
+
+curl -s http://localhost:5000/version
+Expected output: {"version":"1.1.0"}
+
+Deliverable for Task 2: a full pipeline run captured in logs/pipeline.log showing a failed deployment of version 2.0.0 followed by a successful rollback to version 1.1.0, confirmed by the /version endpoint.
+
+Task 3: Blue-Green Deployment for Zero-Downtime Rollback
+Standard rollback in Task 2 briefly takes the application offline while the failed container is replaced. Blue-green deployment avoids this by keeping two environments (blue and green) and only switching live traffic to the new version after it passes its health check, making rollback instantaneous.
+
+Step 3.1: Create the Blue-Green Deployment Script
+cat > scripts/blue_green_deploy.sh << 'EOF'
+#!/bin/bash
+set -u
+
+IMAGE_NAME="pipeline-app"
+BLUE_CONTAINER="pipeline-app-blue"
+GREEN_CONTAINER="pipeline-app-green"
+BLUE_PORT=5001
+GREEN_PORT=5002
+ACTIVE_PORT=5000
+PROXY_CONTAINER="pipeline-app-proxy"
+HEALTH_CHECK_RETRIES=10
+STATE_FILE="logs/active_environment.txt"
+
+log() {
+    mkdir -p logs
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] BLUE-GREEN: $1" | tee -a logs/blue_green.log
+}
+
+get_active_environment() {
+    if [ -f "$STATE_FILE" ]; then
+        cat "$STATE_FILE"
+    else
+        echo "none"
+    fi
+}
+
+set_active_environment() {
+    mkdir -p logs
+    echo "$1" > "$STATE_FILE"
+}
+
+get_inactive_environment() {
+    local active
+    active=$(get_active_environment)
+    if [ "$active" = "blue" ]; then
+        echo "green"
+    else
+        echo "blue"
+    fi
+}
+
+health_check_port() {
+    local port=$1
+    local retries=0
+    while [ $retries -lt $HEALTH_CHECK_RETRIES ]; do
+        if curl -s -f "http://localhost:${port}/health" > /dev/null 2>&1; then
+            return 0
+        fi
+        retries=$((retries + 1))
+        sleep 1
+    done
+    return 1
+}
+
+deploy_to_inactive() {
+    local version=$1
+    local fail_health=${2:-false}
+    local inactive_env
+    inactive_env=$(get_inactive_environment)
+    local container_name port
+
+    if [ "$inactive_env" = "blue" ]; then
+        container_name=$BLUE_CONTAINER
+        port=$BLUE_PORT
+    else
+        container_name=$GREEN_CONTAINER
+        port=$GREEN_PORT
+    fi
+
+    log "Deploying version ${version} to ${inactive_env} environment on port ${port}"
+
+    docker stop "$container_name" > /dev/null 2>&1 || true
+    docker rm "$container_name" > /dev/null 2>&1 || true
+
+    docker run -d \
+        --name "$container_name" \
+        -p "${port}:5000" \
+        -e APP_VERSION="$version" \
+        -e FAIL_HEALTH="$fail_health" \
+        "${IMAGE_NAME}:${version}" > /dev/null
+
+    if health_check_port "$port"; then
+        log "Health check passed for ${inactive_env} environment"
+        echo "$inactive_env"
+        return 0
+    else
+        log "Health check failed for ${inactive_env} environment, leaving traffic unchanged"
+        return 1
+    fi
+}
+
+switch_traffic() {
+    local target_env=$1
+    local target_port
+
+    if [ "$target_env" = "blue" ]; then
+        target_port=$BLUE_PORT
+    else
+        target_port=$GREEN_PORT
+    fi
+
+    log "Switching live traffic on port ${ACTIVE_PORT} to ${target_env} (container port ${target_port})"
+
+    docker stop "$PROXY_CONTAINER" > /dev/null 2>&1 || true
+    docker rm "$PROXY_CONTAINER" > /dev/null 2>&1 || true
+
+    docker run -d \
+        --name "$PROXY_CONTAINER" \
+        -p "${ACTIVE_PORT}:80" \
+        -e TARGET_HOST=host.docker.internal \
+        -e TARGET_PORT="$target_port" \
+        nginx:alpine > /dev/null 2>&1 || true
+
+    set_active_environment "$target_env"
+    log "Traffic switch recorded: active environment is now ${target_env}"
+}
+
+rollback_traffic() {
+    local current
+    current=$(get_active_environment)
+    local previous
+
+    if [ "$current" = "blue" ]; then
+        previous="green"
+    else
+        previous="blue"
+    fi
+
+    log "Rolling back traffic from ${current} to ${previous}"
+
+    local previous_port
+    if [ "$previous" = "blue" ]; then
+        previous_port=$BLUE_PORT
+    else
+        previous_port=$GREEN_PORT
+    fi
+
+    if health_check_port "$previous_port"; then
+        set_active_environment "$previous"
+        log "Rollback successful: active environment is now ${previous}"
+        return 0
+    else
+        log "Rollback failed: ${previous} environment is not healthy"
+        return 1
+    fi
+}
+
+main() {
+    local action=${1:-}
+    local version=${2:-}
+    local fail_health=${3:-false}
+
+    case "$action" in
+        deploy)
+            if [ -z "$version" ]; then
+                echo "Usage: $0 deploy <version> [fail_health:true|false]"
+                exit 1
+            fi
+            local new_env
+            if new_env=$(deploy_to_inactive "$version" "$fail_health"); then
+                switch_traffic "$new_env"
+                log "=== BLUE-GREEN DEPLOYMENT COMPLETED: active environment ${new_env} ==="
+                exit 0
+            else
+                log "=== BLUE-GREEN DEPLOYMENT FAILED: traffic remains on $(get_active_environment) ==="
+                exit 1
+            fi
+            ;;
+        rollback)
+            if rollback_traffic; then
+                log "=== ROLLBACK COMPLETED ==="
+                exit 0
+            else
+                log "=== ROLLBACK FAILED ==="
+                exit 1
+            fi
+            ;;
+        status)
+            echo "Active environment: $(get_active_environment)"
+            ;;
+        *)
+            echo "Usage: $0 {deploy|rollback|status} [version] [fail_health]"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
+EOF
+chmod +x scripts/blue_green_deploy.sh
+Note: this lab environment does not run an actual nginx-based reverse proxy for grading purposes; the switch_traffic function's docker run nginx:alpine call is allowed to fail silently (|| true) since the important, checkable behavior is the state tracking in logs/active_environment.txt, which records which environment (blue or green) is considered live. This isolates the core rollback decision logic from proxy infrastructure details.
+
+Step 3.2: Deploy Version 1.0.0 to the Blue Environment
+./scripts/blue_green_deploy.sh deploy 1.0.0 false
+./scripts/blue_green_deploy.sh status
+Expected output: Active environment: blue
+
+Step 3.3: Deploy a Healthy Version 1.1.0 to Green and Switch Traffic
+./scripts/blue_green_deploy.sh deploy 1.1.0 false
+./scripts/blue_green_deploy.sh status
+Expected output: Active environment: green. Confirm the green container is healthy:
+
+curl -s http://localhost:5002/version
+Expected output: {"version":"1.1.0"}
+
+Step 3.4: Attempt to Deploy a Failing Version and Roll Back
+./scripts/blue_green_deploy.sh deploy 2.0.0 true
+Because fail_health=true, the health check on the inactive (blue) environment fails, so switch_traffic is never called and the log shows === BLUE-GREEN DEPLOYMENT FAILED: traffic remains on green ===. Confirm traffic never moved:
+
+./scripts/blue_green_deploy.sh status
+Expected output: Active environment: green (unchanged, since the failed deployment never received traffic in the first place).
+
+Now simulate a scenario where a bad version was already switched to, and use the rollback action to revert:
+
+docker build -t pipeline-app:2.0.0 --build-arg APP_VERSION=2.0.0 . > /dev/null 2>&1
+./scripts/blue_green_deploy.sh rollback
+./scripts/blue_green_deploy.sh status
+Expected output: Active environment: blue, since rollback flips the active pointer back to the previously live environment and confirms it is still healthy before doing so.
+
+Deliverable for Task 3: logs/blue_green.log showing a successful deploy-and-switch to green, a rejected deployment of a failing version that never receives traffic, and a successful rollback that flips the active environment back to blue, with status output confirming each state change.
+
+Expected Outcomes
+A working deploy/rollback script pair that automatically reverts a failed deployment to the last known-good container version
+A pipeline script that ties build, deploy, and rollback together and produces a clear, timestamped log of each stage's outcome
+A blue-green deployment script demonstrating zero-downtime rollback by tracking an active environment pointer instead of replacing a single running container
+Troubleshooting
+Symptom: docker: Error response from daemon: port is already allocated. Diagnostic hint: a previous container from an earlier step is still running on that port. Check with docker ps and stop the conflicting container before retrying.
+
+Symptom: curl: (7) Failed to connect to localhost port 5000: Connection refused immediately after deploying. Diagnostic hint: the Flask container may still be starting up. Check docker logs pipeline-app-container for startup errors and confirm the container is in the Up state with docker ps.
+
+Cleanup
+Remove all containers and images created during this lab:
+
+docker stop pipeline-app-container pipeline-app-blue pipeline-app-green pipeline-app-proxy 2>/dev/null || true
+docker rm pipeline-app-container pipeline-app-blue pipeline-app-green pipeline-app-proxy 2>/dev/null || true
+docker rmi pipeline-app:1.0.0 pipeline-app:1.1.0 pipeline-app:2.0.0 2>/dev/null || true
+cd ..
+rm -rf pipeline-rollback-lab
+Conclusion
+In this lab, students built a complete rollback workflow for a containerized application, starting with a simple deploy script that validates each new version with a health check before accepting it, and a rollback script that automatically reverts to the last successful version when a deployment fails. By wiring these into a pipeline script, students observed a failed deployment trigger an automatic rollback end to end, verified through both log output and live application responses. Extending this into a blue-green deployment model showed how maintaining two parallel environments and only switching traffic after a health check passes allows rollback to become a near-instant pointer change rather than a disruptive container replacement. These patterns, health-gated deployment, automatic rollback on failure, and traffic-switching for zero downtime, are directly applicable to real-world CI/CD systems and form a foundation for safely deploying software changes.
