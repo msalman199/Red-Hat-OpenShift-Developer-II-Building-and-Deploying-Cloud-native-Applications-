@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: sequential-run-1
+  namespace: pipeline-parallel-lab
+spec:
+  pipelineRef:
+    name: sequential-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/openshift/ruby-hello-world.git"
+    - name: git-revision
+      value: "main"
+  workspaces:
+    - name: shared-data
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
