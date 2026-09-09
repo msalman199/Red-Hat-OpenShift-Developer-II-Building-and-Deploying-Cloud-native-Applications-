@@ -1,0 +1,21 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: build-image-run-$(date +%s)
+  generateName: build-image-run-
+spec:
+  taskRef:
+    name: build-docker-image
+  params:
+    - name: IMAGE
+      value: "image-registry.openshift-image-registry.svc:5000/$(context.taskRun.namespace)/sample-app:latest"
+    - name: DOCKERFILE
+      value: "./Dockerfile"
+    - name: CONTEXT
+      value: "."
+    - name: TLSVERIFY
+      value: "false"
+  workspaces:
+    - name: source
+      persistentVolumeClaim:
+        claimName: source-workspace-pvc

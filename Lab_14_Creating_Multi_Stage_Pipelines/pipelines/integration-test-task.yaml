@@ -1,0 +1,95 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: integration-test-task
+  namespace: default
+spec:
+  description: Run integration tests
+  workspaces:
+    - name: source
+      description: Source code workspace
+  
+  params:
+    - name: image-name
+      type: string
+      description: Container image to test
+    - name: test-namespace
+      type: string
+      description: Namespace for testing
+      default: default
+  
+  steps:
+    - name: deploy-test-instance
+      image: quay.io/openshift/origin-cli:latest
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Deploying test instance..."
+        
+        cat << EOF | oc apply -f -
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: test-app
+          namespace: $(params.test-namespace)
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: test-app
+          template:
+            metadata:
+              labels:
+                app: test-app
+            spec:
+              containers:
+              - name: app
+                image: $(params.image-name)
+                ports:
+                - containerPort: 5000
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: test-app-service
+          namespace: $(params.test-namespace)
+        spec:
+          selector:
+            app: test-app
+          ports:
+          - port: 5000
+            targetPort: 5000
+        EOF
+        
+        echo "Waiting for deployment to be ready..."
+        oc wait --for=condition=available --timeout=300s deployment/test-app -n $(params.test-namespace)
+    
+    - name: run-integration-tests
+      image: curlimages/curl:latest
+      script: |
+        #!/bin/sh
+        set -e
+        echo "Running integration tests..."
+        
+        # Wait a bit for the service to be fully ready
+        sleep 10
+        
+        # Test the health endpoint
+        echo "Testing health endpoint..."
+        curl -f http://test-app-service.$(params.test-namespace).svc.cluster.local:5000/health
+        
+        # Test the main endpoint
+        echo "Testing main endpoint..."
+        curl -f http://test-app-service.$(params.test-namespace).svc.cluster.local:5000/
+        
+        echo "Integration tests passed!"
+    
+    - name: cleanup-test-instance
+      image: quay.io/openshift/origin-cli:latest
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Cleaning up test instance..."
+        oc delete deployment test-app -n $(params.test-namespace) --ignore-not-found=true
+        oc delete service test-app-service -n $(params.test-namespace) --ignore-not-found=true
+        echo "Cleanup completed!"

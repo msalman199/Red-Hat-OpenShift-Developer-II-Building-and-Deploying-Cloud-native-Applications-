@@ -1,0 +1,16 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: test-alternative-source
+  namespace: default
+spec:
+  pipelineRef:
+    name: source-to-image-pipeline
+  resources:
+    - name: app-source
+      resourceRef:
+        name: alternative-source
+    - name: app-image
+      resourceRef:
+        name: built-image
+  serviceAccountName: pipeline-sa

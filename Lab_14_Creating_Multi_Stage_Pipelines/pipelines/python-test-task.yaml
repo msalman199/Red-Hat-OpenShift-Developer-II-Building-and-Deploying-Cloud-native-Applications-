@@ -1,0 +1,41 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: python-test-task
+  namespace: default
+spec:
+  description: Run Python unit tests
+  workspaces:
+    - name: source
+      description: Source code workspace
+  
+  steps:
+    - name: install-dependencies
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Installing test dependencies..."
+        pip install -r tests/requirements.txt
+        pip install -r src/requirements.txt
+    
+    - name: run-unit-tests
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Running unit tests..."
+        python -m pytest tests/ -v --tb=short
+        echo "Unit tests completed successfully!"
+    
+    - name: code-coverage
+      image: python:3.9-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -e
+        echo "Generating code coverage report..."
+        python -m pytest tests/ --cov=src --cov-report=term-missing
+        echo "Code coverage analysis completed!"

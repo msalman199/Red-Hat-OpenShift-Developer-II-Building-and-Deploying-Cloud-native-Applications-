@@ -1,0 +1,62 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: build-and-deploy-with-workspace
+spec:
+  description: Pipeline demonstrating workspace usage for sharing data
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: https://github.com/openshift/nodejs-ex.git
+    - name: git-revision
+      type: string
+      description: Git revision to checkout
+      default: main
+    - name: image-name
+      type: string
+      description: Name of the image to build
+      default: nodejs-app
+  workspaces:
+    - name: shared-data
+      description: Workspace for sharing data between tasks
+    - name: git-credentials
+      description: Workspace for git credentials (optional)
+      optional: true
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: deleteExisting
+          value: "true"
+      workspaces:
+        - name: output
+          workspace: shared-data
+    - name: list-source
+      taskRef:
+        name: list-directory
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - list-source
+      params:
+        - name: IMAGE
+          value: "image-registry.openshift-image-registry.svc:5000/$(context.pipelineRun.namespace)/$(params.image-name):latest"
+        - name: DOCKERFILE
+          value: "./Dockerfile"
+      workspaces:
+        - name: source
+          workspace: shared-data

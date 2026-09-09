@@ -1,0 +1,22 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: hello-world-task
+spec:
+  params:
+    - name: message
+      type: string
+      default: "Hello World"
+  steps:
+    - name: echo
+      image: ubuntu
+      command:
+        - echo
+      args:
+        - "$(params.message)"
+    - name: sleep
+      image: ubuntu
+      command:
+        - sleep
+      args:
+        - "30"

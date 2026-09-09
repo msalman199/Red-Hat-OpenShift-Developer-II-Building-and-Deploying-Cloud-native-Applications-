@@ -1,0 +1,9 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: corrected-pipeline
+spec:
+  tasks:
+    - name: corrected-task
+      taskRef:
+        name: corrected-task

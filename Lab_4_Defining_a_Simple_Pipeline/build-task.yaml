@@ -1,0 +1,44 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-app
+  namespace: default
+spec:
+  description: "Build application using buildah"
+  params:
+    - name: image-name
+      description: "Name of the image to build"
+      type: string
+      default: "my-app"
+    - name: image-tag
+      description: "Tag for the image"
+      type: string
+      default: "latest"
+  workspaces:
+    - name: source
+      description: "Workspace containing source code"
+  steps:
+    - name: build-image
+      image: quay.io/buildah/stable:v1.23.1
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env bash
+        echo "Starting build process..."
+        echo "Building image: $(params.image-name):$(params.image-tag)"
+        
+        # Create a simple Dockerfile if it doesn't exist
+        if [ ! -f Dockerfile ]; then
+          cat > Dockerfile << EOF
+        FROM registry.access.redhat.com/ubi8/ubi:latest
+        WORKDIR /app
+        COPY . /app
+        RUN echo "Application built successfully"
+        CMD ["echo", "Hello from containerized app"]
+        EOF
+        fi
+        
+        # Build the container image
+        buildah build -t $(params.image-name):$(params.image-tag) .
+        echo "Build completed successfully"
+      securityContext:
+        privileged: true

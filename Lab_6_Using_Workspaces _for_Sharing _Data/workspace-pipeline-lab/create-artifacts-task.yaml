@@ -1,0 +1,58 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: create-build-artifacts
+spec:
+  description: Create build artifacts and metadata
+  params:
+    - name: app-name
+      type: string
+      default: nodejs-app
+  workspaces:
+    - name: source
+      description: Source code workspace
+      mountPath: /workspace/source
+  steps:
+    - name: create-artifacts
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        set -e
+        
+        echo "=== Creating Build Artifacts ==="
+        
+        # Create artifacts directory
+        mkdir -p /workspace/source/artifacts
+        
+        # Create build metadata
+        cat > /workspace/source/artifacts/build-info.json << EOF
+        {
+          "buildTime": "$(date -Iseconds)",
+          "appName": "$(params.app-name)",
+          "buildNumber": "${RANDOM}",
+          "gitCommit": "$(cat /workspace/source/.git/HEAD 2>/dev/null || echo 'unknown')",
+          "builder": "tekton-pipeline"
+        }
+        EOF
+        
+        # Create a simple build report
+        cat > /workspace/source/artifacts/build-report.txt << EOF
+        Build Report
+        ============
+        Application: $(params.app-name)
+        Build Time: $(date)
+        Source Files: $(find /workspace/source -name "*.js" -o -name "*.json" | wc -l)
+        Total Files: $(find /workspace/source -type f | wc -l)
+        
+        Source Structure:
+        $(find /workspace/source -type f -name "*.js" -o -name "*.json" | head -10)
+        EOF
+        
+        # Create version file
+        echo "1.0.${RANDOM}" > /workspace/source/artifacts/version.txt
+        
+        echo "=== Artifacts Created ==="
+        ls -la /workspace/source/artifacts/
+        
+        echo "=== Build Info ==="
+        cat /workspace/source/artifacts/build-info.json

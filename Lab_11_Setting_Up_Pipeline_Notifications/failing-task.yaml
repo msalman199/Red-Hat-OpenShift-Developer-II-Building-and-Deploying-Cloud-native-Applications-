@@ -1,0 +1,13 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: failing-task
+  namespace: pipeline-notifications
+spec:
+  steps:
+    - name: fail-step
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      script: |
+        #!/bin/bash
+        echo "This task will fail intentionally"
+        exit 1

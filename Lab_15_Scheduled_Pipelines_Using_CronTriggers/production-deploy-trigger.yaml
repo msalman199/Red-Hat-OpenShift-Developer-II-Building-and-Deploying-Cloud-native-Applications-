@@ -1,0 +1,22 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: CronTrigger
+metadata:
+  name: production-deploy-trigger
+spec:
+  schedule: "0 22 * * 0"  # Every Sunday at 10:00 PM
+  pipelineRef:
+    name: scheduled-build-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/tektoncd/pipeline.git"
+    - name: git-revision
+      value: "release"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi

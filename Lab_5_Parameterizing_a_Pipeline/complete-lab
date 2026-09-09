@@ -1,0 +1,363 @@
+Lab 5: Parameterizing a Pipeline
+Objectives
+By the end of this lab, you will be able to:
+
+• Understand the concept of pipeline parameterization in OpenShift • Modify existing Tekton pipelines to accept dynamic parameters • Configure parameters for image tags, repository URLs, and deployment configurations • Execute parameterized pipelines with custom values • Validate that pipeline parameters are correctly applied during execution • Implement best practices for pipeline parameter management
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of OpenShift and Kubernetes concepts • Familiarity with Tekton Pipelines and Tasks • Knowledge of YAML syntax and structure • Experience with command-line interface (CLI) tools • Completion of previous labs covering basic pipeline creation • Understanding of container images and tags
+
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides Linux-based cloud machines with all necessary tools pre-installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes: • OpenShift cluster with Tekton Pipelines installed • oc CLI tool configured and authenticated • tkn CLI tool for Tekton operations • Git client for repository operations • Text editor (vim/nano) for file modifications
+
+Task 1: Understanding Pipeline Parameters
+Subtask 1.1: Review Current Pipeline Structure
+First, let's examine your existing pipeline to understand its current structure.
+
+Connect to your OpenShift cluster:
+oc login --server=https://your-cluster-url --token=your-token
+Switch to your project namespace:
+oc project your-project-name
+List existing pipelines:
+tkn pipeline list
+View your current pipeline definition:
+tkn pipeline describe build-and-deploy-pipeline
+Subtask 1.2: Identify Parameterization Opportunities
+Examine your pipeline and identify hardcoded values that should be parameterized:
+
+Export current pipeline to YAML:
+oc get pipeline build-and-deploy-pipeline -o yaml > current-pipeline.yaml
+Review the pipeline file:
+cat current-pipeline.yaml
+Look for hardcoded values such as: • Image names and tags • Repository URLs • Deployment names • Resource limits
+
+Task 2: Modify Pipeline to Accept Parameters
+Subtask 2.1: Create Parameterized Pipeline Definition
+Create a new pipeline definition with parameters.
+
+Create a new pipeline file:
+cat > parameterized-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: parameterized-build-deploy
+  namespace: your-project-name
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: "https://github.com/your-username/sample-app.git"
+    - name: git-revision
+      type: string
+      description: Git revision to checkout
+      default: "main"
+    - name: image-name
+      type: string
+      description: Name of the container image
+      default: "sample-app"
+    - name: image-tag
+      type: string
+      description: Tag for the container image
+      default: "latest"
+    - name: deployment-name
+      type: string
+      description: Name of the deployment
+      default: "sample-app-deployment"
+    - name: registry-url
+      type: string
+      description: Container registry URL
+      default: "image-registry.openshift-image-stream.svc:5000"
+  workspaces:
+    - name: shared-data
+    - name: git-credentials
+      optional: true
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+        - name: basic-auth
+          workspace: git-credentials
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: IMAGE
+          value: "$(params.registry-url)/$(context.pipelineRun.namespace)/$(params.image-name):$(params.image-tag)"
+        - name: DOCKERFILE
+          value: "./Dockerfile"
+    - name: deploy-application
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - build-image
+      params:
+        - name: SCRIPT
+          value: |
+            oc set image deployment/$(params.deployment-name) \
+              $(params.deployment-name)=$(params.registry-url)/$(context.pipelineRun.namespace)/$(params.image-name):$(params.image-tag)
+            oc rollout status deployment/$(params.deployment-name)
+EOF
+Subtask 2.2: Apply the Parameterized Pipeline
+Apply the new pipeline:
+oc apply -f parameterized-pipeline.yaml
+Verify the pipeline was created:
+tkn pipeline describe parameterized-build-deploy
+Check the parameters section:
+tkn pipeline describe parameterized-build-deploy | grep -A 20 "Params"
+Subtask 2.3: Create Workspace Resources
+Create the necessary workspace resources for the pipeline.
+
+Create a PersistentVolumeClaim for shared data:
+cat > pipeline-workspace-pvc.yaml << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pipeline-workspace-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+Apply the PVC:
+oc apply -f pipeline-workspace-pvc.yaml
+Task 3: Pass Parameters When Running the Pipeline
+Subtask 3.1: Run Pipeline with Default Parameters
+First, test the pipeline using default parameter values.
+
+Create a PipelineRun with default parameters:
+cat > pipelinerun-default.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parameterized-run-default
+spec:
+  pipelineRef:
+    name: parameterized-build-deploy
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc
+EOF
+Execute the pipeline run:
+oc apply -f pipelinerun-default.yaml
+Monitor the pipeline execution:
+tkn pipelinerun logs parameterized-run-default -f
+Subtask 3.2: Run Pipeline with Custom Parameters
+Now run the pipeline with custom parameter values.
+
+Create a PipelineRun with custom parameters:
+cat > pipelinerun-custom.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parameterized-run-custom
+spec:
+  pipelineRef:
+    name: parameterized-build-deploy
+  params:
+    - name: git-url
+      value: "https://github.com/your-username/custom-app.git"
+    - name: git-revision
+      value: "develop"
+    - name: image-name
+      value: "custom-application"
+    - name: image-tag
+      value: "v1.2.3"
+    - name: deployment-name
+      value: "custom-app-deployment"
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc
+EOF
+Execute the custom pipeline run:
+oc apply -f pipelinerun-custom.yaml
+Monitor the execution:
+tkn pipelinerun logs parameterized-run-custom -f
+Subtask 3.3: Use CLI to Start Pipeline with Parameters
+You can also start pipelines directly using the Tekton CLI.
+
+Start pipeline with CLI parameters:
+tkn pipeline start parameterized-build-deploy \
+  --param git-url="https://github.com/your-username/another-app.git" \
+  --param git-revision="feature-branch" \
+  --param image-name="feature-app" \
+  --param image-tag="feature-v1.0.0" \
+  --param deployment-name="feature-deployment" \
+  --workspace name=shared-data,claimName=pipeline-workspace-pvc \
+  --showlog
+List all pipeline runs:
+tkn pipelinerun list
+Task 4: Verify Parameter Usage
+Subtask 4.1: Examine Pipeline Run Details
+Verify that the pipeline correctly uses the passed parameters.
+
+Get detailed information about a pipeline run:
+tkn pipelinerun describe parameterized-run-custom
+Check the parameters section in the output:
+tkn pipelinerun describe parameterized-run-custom | grep -A 10 "Params"
+View the task runs and their parameters:
+oc get taskruns -l tekton.dev/pipelineRun=parameterized-run-custom -o yaml | grep -A 5 -B 5 "params:"
+Subtask 4.2: Verify Image Build with Custom Tag
+Check that the image was built with the correct tag.
+
+List images in the internal registry:
+oc get imagestreams
+Check the specific image stream:
+oc describe imagestream custom-application
+Verify the image tag:
+oc get imagestreamtag custom-application:v1.2.3
+Subtask 4.3: Verify Deployment Configuration
+Confirm that the deployment uses the parameterized values.
+
+Check the deployment:
+oc get deployment custom-app-deployment -o yaml | grep image:
+Verify the deployment status:
+oc rollout status deployment/custom-app-deployment
+Check pod specifications:
+oc get pods -l app=custom-app-deployment -o jsonpath='{.items[0].spec.containers[0].image}'
+Task 5: Advanced Parameter Techniques
+Subtask 5.1: Create Parameter Validation
+Add parameter validation to ensure proper values are provided.
+
+Create an enhanced pipeline with validation:
+cat > validated-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: validated-parameterized-pipeline
+spec:
+  params:
+    - name: image-tag
+      type: string
+      description: Tag for the container image (must follow semantic versioning)
+      default: "v1.0.0"
+    - name: environment
+      type: string
+      description: Target environment (dev, staging, prod)
+      default: "dev"
+    - name: replicas
+      type: string
+      description: Number of replicas (1-10)
+      default: "1"
+  tasks:
+    - name: validate-parameters
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Validating parameters..."
+            
+            # Validate image tag format
+            if [[ ! "$(params.image-tag)" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Error: image-tag must follow semantic versioning (e.g., v1.0.0)"
+              exit 1
+            fi
+            
+            # Validate environment
+            if [[ ! "$(params.environment)" =~ ^(dev|staging|prod)$ ]]; then
+              echo "Error: environment must be dev, staging, or prod"
+              exit 1
+            fi
+            
+            # Validate replicas
+            if [[ $(params.replicas) -lt 1 || $(params.replicas) -gt 10 ]]; then
+              echo "Error: replicas must be between 1 and 10"
+              exit 1
+            fi
+            
+            echo "All parameters are valid!"
+    - name: display-config
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - validate-parameters
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Pipeline Configuration:"
+            echo "Image Tag: $(params.image-tag)"
+            echo "Environment: $(params.environment)"
+            echo "Replicas: $(params.replicas)"
+EOF
+Apply the validated pipeline:
+oc apply -f validated-pipeline.yaml
+Subtask 5.2: Test Parameter Validation
+Test the validation with both valid and invalid parameters.
+
+Test with valid parameters:
+tkn pipeline start validated-parameterized-pipeline \
+  --param image-tag="v2.1.0" \
+  --param environment="staging" \
+  --param replicas="3" \
+  --showlog
+Test with invalid parameters:
+tkn pipeline start validated-parameterized-pipeline \
+  --param image-tag="invalid-tag" \
+  --param environment="testing" \
+  --param replicas="15" \
+  --showlog
+Troubleshooting Common Issues
+Issue 1: Parameter Not Found Error
+Problem: Pipeline fails with "parameter not found" error.
+
+Solution:
+
+# Check parameter names in pipeline definition
+tkn pipeline describe your-pipeline-name | grep -A 20 "Params"
+
+# Ensure parameter names match exactly (case-sensitive)
+# Verify parameter is defined in pipeline spec
+Issue 2: Default Values Not Applied
+Problem: Pipeline uses empty values instead of defaults.
+
+Solution:
+
+# Check if parameter has proper default value
+oc get pipeline your-pipeline-name -o yaml | grep -A 5 "params:"
+
+# Ensure default values are properly formatted in YAML
+Issue 3: Workspace Binding Issues
+Problem: Pipeline fails due to workspace binding errors.
+
+Solution:
+
+# Verify PVC exists
+oc get pvc pipeline-workspace-pvc
+
+# Check workspace names match between pipeline and pipelinerun
+# Ensure proper permissions on workspace volumes
+Conclusion
+In this lab, you have successfully:
+
+• Parameterized a Tekton pipeline by adding configurable parameters for image tags, repository URLs, and deployment configurations • Modified pipeline definitions to accept dynamic input values while maintaining default fallbacks • Executed pipelines with custom parameters using both YAML manifests and CLI commands • Validated parameter usage by examining pipeline runs and verifying that custom values were correctly applied • Implemented parameter validation to ensure data integrity and prevent common configuration errors
+
+Why This Matters: Pipeline parameterization is crucial for creating reusable, flexible CI/CD workflows. Instead of maintaining multiple similar pipelines for different environments or applications, you can use a single parameterized pipeline that adapts to various scenarios. This approach reduces maintenance overhead, improves consistency, and enables teams to standardize their deployment processes while maintaining the flexibility to customize behavior when needed.
+
+The skills you've learned enable you to build production-ready pipelines that can handle multiple environments, different application versions, and varying deployment requirements - all essential capabilities for modern DevOps practices in enterprise environments.

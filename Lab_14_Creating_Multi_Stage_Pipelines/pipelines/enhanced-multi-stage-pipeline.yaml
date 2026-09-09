@@ -1,0 +1,198 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: enhanced-multi-stage-pipeline
+  namespace: default
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      description: Git revision to build
+      default: main
+    - name: image-name
+      type: string
+      description: Name of the image to build
+    - name: deployment-namespace
+      type: string
+      description: Namespace for deployment
+      default: default
+    - name: enable-security-scan
+      type: string
+      description: Enable security scanning
+      default: "true"
+    - name: run-integration-tests
+      type: string
+      description: Run integration tests
+      default: "true"
+  
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for pipeline tasks
+  
+  tasks:
+    # Stage 1: Source Code Management
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+    
+    # Stage 2: Build (runs after source fetch)
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+        - name: DOCKERFILE
+          value: ./Dockerfile
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    # Stage 3: Testing (parallel execution)
+    - name: unit-tests
+      taskRef:
+        name: python-test-task
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    - name: security-scan
+      taskRef:
+        name: security-scan-task
+      runAfter:
+        - build-image
+      when:
+        - input: $(params.enable-security-scan)
+          operator: in
+          values: ["true"]
+      params:
+        - name: image-name
+          value: $(params.image-name)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    # Stage 4: Integration Testing (runs after build and unit tests)
+    - name: integration-tests
+      taskRef:
+        name: integration-test-task
+      runAfter:
+        - build-image
+        - unit-tests
+      when:
+        - input: $(params.run-integration-tests)
+          operator: in
+          values: ["true"]
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: test-namespace
+          value: $(params.deployment-namespace)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    
+    # Stage 5: Deployment (runs after all tests pass)
+    - name: deploy-to-staging
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - integration-tests
+        - security-scan
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Deploying to staging environment..."
+            
+            cat << EOF | oc apply -f -
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: multi-stage-app
+              namespace: $(params.deployment-namespace)
+              labels:
+                app: multi-stage-app
+                stage: staging
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: multi-stage-app
+              template:
+                metadata:
+                  labels:
+                    app: multi-stage-app
+                spec:
+                  containers:
+                  - name: app
+                    image: $(params.image-name)
+                    ports:
+                    - containerPort: 5000
+                    env:
+                    - name: APP_VERSION
+                      value: "$(params.git-revision)"
+                    - name: DEPLOYMENT_STAGE
+                      value: "staging"
+                    resources:
+                      requests:
+                        memory: "128Mi"
+                        cpu: "100m"
+                      limits:
+                        memory: "256Mi"
+                        cpu: "200m"
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: multi-stage-app-service
+              namespace: $(params.deployment-namespace)
+            spec:
+              selector:
+                app: multi-stage-app
+              ports:
+              - port: 80
+                targetPort: 5000
+              type: ClusterIP
+            EOF
+            
+            echo "Waiting for deployment to be ready..."
+            oc wait --for=condition=available --timeout=300s deployment/multi-stage-app -n $(params.deployment-namespace)
+            echo "Deployment to staging completed successfully!"
+      workspaces:
+        - name: manifest-dir
+          workspace: shared-workspace
+    
+    # Stage 6: Production Deployment (manual approval simulation)
+    - name: deploy-to-production
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - deploy-to-staging
+      params:
+        - name: SCRIPT
+          value: |
+            echo "Production deployment would require manual approval..."
+            echo "In a real scenario, this would be triggered by a separate pipeline or manual process"
+            echo "Staging deployment is ready for promotion to production"
+      workspaces:
+        - name: manifest-dir
+          workspace: shared-workspace

@@ -1,0 +1,11 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: parameterized-run-default
+spec:
+  pipelineRef:
+    name: parameterized-build-deploy
+  workspaces:
+    - name: shared-data
+      persistentVolumeClaim:
+        claimName: pipeline-workspace-pvc
