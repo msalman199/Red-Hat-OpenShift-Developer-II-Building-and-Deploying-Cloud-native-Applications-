@@ -1,0 +1,527 @@
+Lab Material
+Lab: Implementing CI/CD for Multiple Environments
+Objectives
+By the end of this lab, students will be able to:
+
+â¢ Structure a project repository to support multiple deployment environments (development, staging, production) â¢ Create environment-specific configuration files using Kubernetes/OpenShift ConfigMaps â¢ Write parameterized shell scripts that build, deploy, and test an application per environment â¢ Configure a GitHub Actions workflow that promotes a build through dev, staging, and production stages â¢ Troubleshoot common configuration and deployment issues in a multi-environment pipeline
+
+Prerequisites
+Before starting this lab, students should have:
+
+â¢ Basic understanding of Git version control â¢ Familiarity with containerization concepts (Docker) â¢ Knowledge of YAML syntax and configuration files â¢ A basic understanding of Kubernetes/OpenShift objects (Deployment, Service, ConfigMap) â¢ Access to a Linux-based environment with the following tools installed:
+
+git --version
+docker --version
+oc version --client
+If any of these are missing on a Debian/Ubuntu-based system, install them with:
+
+sudo apt-get update
+sudo apt-get install -y git docker.io
+The OpenShift CLI (oc) install method varies by distribution; if it is not already present in your lab environment, follow your organization's standard installation instructions for oc before continuing. This lab assumes oc is already configured and logged in to a cluster (oc whoami should return a username). If you do not have cluster access, you can still complete Tasks 1 and 2 fully, and treat Task 3's oc commands as read-only reference commands to review rather than execute.
+
+Task 1: Setting Up the Multi-Environment Project Structure
+Subtask 1.1: Create the Project and Sample Application
+Create the project directory and initialize Git:
+mkdir -p ~/multi-env-cicd
+cd ~/multi-env-cicd
+git init
+git config user.name "Lab Student"
+git config user.email "student@example.com"
+Create the directory structure:
+mkdir -p src config/dev config/staging config/prod
+mkdir -p manifests/dev manifests/staging manifests/prod
+mkdir -p scripts .github/workflows
+Verify the structure:
+find . -type d -not -path './.git*' | sort
+Expected output:
+
+.
+./.github
+./.github/workflows
+./config
+./config/dev
+./config/prod
+./config/staging
+./manifests
+./manifests/dev
+./manifests/prod
+./manifests/staging
+./scripts
+./src
+Create a minimal Node.js application in src/app.js:
+cat > src/app.js << 'EOF'
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+const environment = process.env.NODE_ENV || 'development';
+const version = process.env.APP_VERSION || '1.0.0';
+
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Hello from Multi-Environment CI/CD',
+    environment: environment,
+    version: version
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', environment: environment });
+});
+
+app.listen(port, () => {
+  console.log(`App running on port ${port} in ${environment} environment`);
+});
+EOF
+Create src/package.json:
+cat > src/package.json << 'EOF'
+{
+  "name": "multi-env-app",
+  "version": "1.0.0",
+  "description": "Sample app for multi-environment CI/CD",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "echo \"Running tests...\" && exit 0"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+EOF
+Create src/Dockerfile:
+cat > src/Dockerfile << 'EOF'
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+COPY . .
+
+EXPOSE 3000
+
+USER node
+
+CMD ["npm", "start"]
+EOF
+Deliverable: A multi-env-cicd directory containing the structure shown above, with src/app.js, src/package.json, and src/Dockerfile populated. Confirm with cat src/app.js that the file contains the /health route.
+
+Task 2: Creating Environment-Specific Configuration and Manifests
+Subtask 2.1: Development Configuration
+Create the development ConfigMap:
+cat > config/dev/app-config.yaml << 'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: multi-env-dev
+data:
+  NODE_ENV: "development"
+  APP_VERSION: "dev-1.0.0"
+  LOG_LEVEL: "debug"
+EOF
+Create the development Deployment manifest:
+cat > manifests/dev/deployment.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-env-app
+  namespace: multi-env-dev
+  labels:
+    app: multi-env-app
+    environment: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multi-env-app
+  template:
+    metadata:
+      labels:
+        app: multi-env-app
+        environment: dev
+    spec:
+      containers:
+      - name: app
+        image: multi-env-app:dev-1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: NODE_ENV
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_VERSION
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+EOF
+Create the development Service:
+cat > manifests/dev/service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-env-app-service
+  namespace: multi-env-dev
+spec:
+  selector:
+    app: multi-env-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP
+EOF
+Subtask 2.2: Staging and Production Configuration
+Create the staging ConfigMap, Deployment, and Service (2 replicas, higher resources):
+cat > config/staging/app-config.yaml << 'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: multi-env-staging
+data:
+  NODE_ENV: "staging"
+  APP_VERSION: "staging-1.0.0"
+  LOG_LEVEL: "info"
+EOF
+
+cat > manifests/staging/deployment.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-env-app
+  namespace: multi-env-staging
+  labels:
+    app: multi-env-app
+    environment: staging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: multi-env-app
+  template:
+    metadata:
+      labels:
+        app: multi-env-app
+        environment: staging
+    spec:
+      containers:
+      - name: app
+        image: multi-env-app:staging-1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: NODE_ENV
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_VERSION
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+EOF
+
+cat > manifests/staging/service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-env-app-service
+  namespace: multi-env-staging
+spec:
+  selector:
+    app: multi-env-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP
+EOF
+Create the production ConfigMap, Deployment, and Service (3 replicas, highest resources):
+cat > config/prod/app-config.yaml << 'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: multi-env-prod
+data:
+  NODE_ENV: "production"
+  APP_VERSION: "prod-1.0.0"
+  LOG_LEVEL: "warn"
+EOF
+
+cat > manifests/prod/deployment.yaml << 'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-env-app
+  namespace: multi-env-prod
+  labels:
+    app: multi-env-app
+    environment: prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: multi-env-app
+  template:
+    metadata:
+      labels:
+        app: multi-env-app
+        environment: prod
+    spec:
+      containers:
+      - name: app
+        image: multi-env-app:prod-1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: NODE_ENV
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_VERSION
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+EOF
+
+cat > manifests/prod/service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: multi-env-app-service
+  namespace: multi-env-prod
+spec:
+  selector:
+    app: multi-env-app
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+  type: ClusterIP
+EOF
+Validate all YAML files parse correctly:
+for f in config/*/app-config.yaml manifests/*/deployment.yaml manifests/*/service.yaml; do
+  python3 -c "import yaml,sys; yaml.safe_load(open('$f'))" && echo "OK: $f"
+done
+Deliverable: Nine YAML files (3 ConfigMaps, 3 Deployments, 3 Services) across config/ and manifests/. The validation loop should print OK: <path> for every file with no errors.
+
+Task 3: Building Parameterized Pipeline Scripts
+Subtask 3.1: Build, Deploy, and Test Scripts
+Create a parameterized build script:
+cat > scripts/build.sh << 'EOF'
+#!/bin/bash
+set -e
+
+ENVIRONMENT=${1:-dev}
+IMAGE_TAG=${2:-1.0.0}
+IMAGE_NAME="multi-env-app"
+
+echo "Building application for environment: $ENVIRONMENT"
+echo "Image tag: ${ENVIRONMENT}-${IMAGE_TAG}"
+
+cd src
+docker build -t ${IMAGE_NAME}:${ENVIRONMENT}-${IMAGE_TAG} .
+cd ..
+
+echo "Build completed: ${IMAGE_NAME}:${ENVIRONMENT}-${IMAGE_TAG}"
+EOF
+chmod +x scripts/build.sh
+Create a parameterized deploy script:
+cat > scripts/deploy.sh << 'EOF'
+#!/bin/bash
+set -e
+
+ENVIRONMENT=${1:-dev}
+IMAGE_TAG=${2:-1.0.0}
+NAMESPACE="multi-env-${ENVIRONMENT}"
+
+echo "Deploying to environment: $ENVIRONMENT (namespace: $NAMESPACE)"
+
+oc create namespace "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
+
+oc apply -f "config/${ENVIRONMENT}/app-config.yaml"
+
+sed "s/${ENVIRONMENT}-1.0.0/${ENVIRONMENT}-${IMAGE_TAG}/g" \
+  "manifests/${ENVIRONMENT}/deployment.yaml" > "/tmp/deployment-${ENVIRONMENT}.yaml"
+
+oc apply -f "/tmp/deployment-${ENVIRONMENT}.yaml"
+oc apply -f "manifests/${ENVIRONMENT}/service.yaml"
+
+oc rollout status "deployment/multi-env-app" -n "$NAMESPACE" --timeout=180s
+
+echo "Deployment to $ENVIRONMENT completed successfully."
+EOF
+chmod +x scripts/deploy.sh
+Create a parameterized test script that checks the health endpoint from inside the cluster:
+cat > scripts/test.sh << 'EOF'
+#!/bin/bash
+set -e
+
+ENVIRONMENT=${1:-dev}
+NAMESPACE="multi-env-${ENVIRONMENT}"
+
+echo "Running tests for environment: $ENVIRONMENT"
+
+oc wait --for=condition=available "deployment/multi-env-app" \
+  -n "$NAMESPACE" --timeout=120s
+
+echo "Checking /health endpoint..."
+oc exec -n "$NAMESPACE" "deployment/multi-env-app" -- \
+  wget -qO- http://localhost:3000/health
+
+echo ""
+echo "All tests passed for environment: $ENVIRONMENT"
+EOF
+chmod +x scripts/test.sh
+Review the scripts for correctness (no cluster required for this step):
+bash -n scripts/build.sh && echo "build.sh syntax OK"
+bash -n scripts/deploy.sh && echo "deploy.sh syntax OK"
+bash -n scripts/test.sh && echo "test.sh syntax OK"
+Deliverable: Three executable scripts in scripts/ that each accept an environment name (dev, staging, or prod) as their first argument. bash -n should report no syntax errors for all three.
+
+Subtask 3.2: Create the GitHub Actions Multi-Environment Workflow
+Create the workflow file that builds once and promotes through dev, staging, and production:
+cat > .github/workflows/multi-env-cicd.yml << 'EOF'
+name: Multi-Environment CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: multi-env-app
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: src
+        run: npm install
+
+      - name: Run unit tests
+        working-directory: src
+        run: npm test
+
+      - name: Build Docker image
+        run: |
+          cd src
+          docker build -t ${{ env.IMAGE_NAME }}:dev-${{ github.sha }} .
+
+  deploy-dev:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to development
+        run: |
+          echo "Would run: ./scripts/deploy.sh dev ${{ github.sha }}"
+      - name: Test development deployment
+        run: |
+          echo "Would run: ./scripts/test.sh dev"
+
+  deploy-staging:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to staging
+        run: |
+          echo "Would run: ./scripts/deploy.sh staging ${{ github.sha }}"
+      - name: Test staging deployment
+        run: |
+          echo "Would run: ./scripts/test.sh staging"
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to production
+        run: |
+          echo "Would run: ./scripts/deploy.sh prod ${{ github.sha }}"
+      - name: Test production deployment
+        run: |
+          echo "Would run: ./scripts/test.sh prod"
+EOF
+Validate the workflow YAML is syntactically correct:
+python3 -c "import yaml; yaml.safe_load(open('.github/workflows/multi-env-cicd.yml'))" && echo "Workflow YAML is valid"
+Commit the completed project:
+git add .
+git commit -m "Add multi-environment CI/CD structure, manifests, scripts, and workflow"
+Deliverable: A valid .github/workflows/multi-env-cicd.yml file with four jobs (build-and-test, deploy-dev, deploy-staging, deploy-production) chained with needs, and a Git commit containing the full project. Running the Python validation command should print Workflow YAML is valid.
+
+Expected Outcomes
+â¢ A complete local repository with environment-scoped ConfigMaps, Deployments, and Services for dev, staging, and production â¢ Three working parameterized shell scripts (build.sh, deploy.sh, test.sh) that behave differently per environment argument without code duplication â¢ A syntactically valid GitHub Actions workflow that demonstrates promotion order: build/test, then dev, then staging, then production, gated by branch conditions
+
+Troubleshooting
+Issue 1: oc apply fails with "namespace not found" or similar authorization error. Symptom: deploy.sh errors out on the oc create namespace or oc apply step. Diagnostic hint: run oc whoami and oc get namespaces to confirm you are logged in and have permission to create namespaces; if you have no cluster access, treat Task 3's deploy/test steps as a dry run and verify script logic with bash -n instead.
+
+Issue 2: The sed substitution in deploy.sh does not update the image tag. Symptom: oc get deployment ... -o jsonpath='{.spec.template.spec.containers[0].image}' still shows the default tag (e.g., dev-1.0.0) after deploying with a different IMAGE_TAG. Diagnostic hint: confirm the pattern in sed exactly matches the string present in the corresponding manifests/<env>/deployment.yaml image line; the placeholder tag in each manifest must match what the script searches for.
+
+Conclusion
+In this lab, you built a self-contained multi-environment CI/CD project from the ground up: a directory structure separating configuration and manifests for dev, staging, and production; a small Node.js application with a health endpoint; environment-specific ConfigMaps, Deployments, and Services with appropriately scaled resources and replica counts; and a set of parameterized shell scripts that build, deploy, and test the application against any target environment without duplicating logic. You also authored and validated a GitHub Actions workflow that enforces a realistic promotion order, only advancing a build to staging and production after it succeeds in earlier stages. Through this process you practiced the core discipline behind safe multi-environment delivery: keeping environment differences isolated in configuration rather than in code, and gating promotion on automated verification at each stage. As a next step, you could extend this pipeline with real secrets management (for example, OpenShift Secrets or a vault integration), automated rollback triggers based on failed health checks, and manual approval gates before production deployment.
