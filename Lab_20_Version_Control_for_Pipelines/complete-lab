@@ -1,0 +1,465 @@
+Lab: Version Control for OpenShift Pipelines
+Objectives
+By the end of this lab, students will be able to:
+
+Store Tekton pipeline YAML files in a Git repository using an organized directory structure
+Apply semantic versioning to pipeline definitions using labels, Git tags, and a version manager script
+Track pipeline changes across environments using Git branches and commit history
+Implement a rollback procedure to restore a previous pipeline version using Git tags
+Validate pipeline YAML files before committing changes to version control
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Git version control concepts (init, add, commit, tag, branch)
+Familiarity with YAML file structure and syntax
+Knowledge of CI/CD pipeline fundamentals (Tekton Pipelines and Tasks)
+Experience with command-line interface operations on Linux
+Basic knowledge of OpenShift or Kubernetes environments
+This lab runs entirely on the local filesystem using Git. No live OpenShift cluster is required to complete the tasks, since all oc apply commands are shown for reference only. All work should be performed in an isolated, self-owned practice environment.
+
+Install the required tools before starting (skip any that are already installed):
+
+# Verify Git is installed
+git --version
+
+# Verify Python 3 is installed (used for YAML validation)
+python3 --version
+
+# Install the PyYAML library used for validating pipeline files
+pip3 install --user pyyaml
+Task 1: Initialize the Pipeline Repository and Store YAML Definitions
+Step 1: Create the repository and directory structure
+mkdir -p ~/pipeline-version-control
+cd ~/pipeline-version-control
+
+git init -b main
+git config user.name "Pipeline Developer"
+git config user.email "developer@example.com"
+
+mkdir -p pipelines/build pipelines/deploy tasks environments/dev environments/prod scripts automation
+Step 2: Add a README describing the repository layout
+cat > README.md << 'EOF'
+# Pipeline Version Control Repository
+
+This repository contains Tekton pipeline definitions and related resources,
+managed using Git for version control.
+
+## Directory Structure
+
+- pipelines/build   : Build pipeline definitions
+- pipelines/deploy  : Deployment pipeline definitions
+- tasks             : Reusable Tekton Task definitions
+- environments/dev  : Development environment pipeline variants
+- environments/prod : Production environment pipeline variants
+- scripts           : Helper scripts (versioning, validation)
+- automation        : Rollback and deployment automation scripts
+
+## Versioning
+
+Pipeline versions are tracked with:
+1. A `version` label inside each pipeline's metadata
+2. Git tags following semantic versioning (vMAJOR.MINOR.PATCH)
+EOF
+Step 3: Create the build pipeline definition
+cat > pipelines/build/nodejs-build-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: nodejs-build-pipeline
+  labels:
+    version: "1.0.0"
+    type: build
+spec:
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      default: main
+      description: Git revision to build
+    - name: image-name
+      type: string
+      description: Name of the image to build
+  workspaces:
+    - name: shared-data
+      description: Shared workspace for pipeline tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+EOF
+Step 4: Create a deployment pipeline and a reusable task
+cat > pipelines/deploy/nodejs-deploy-pipeline.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: nodejs-deploy-pipeline
+  labels:
+    version: "1.0.0"
+    type: deploy
+spec:
+  params:
+    - name: image-name
+      type: string
+      description: Container image to deploy
+    - name: deployment-name
+      type: string
+      description: Name of the deployment
+    - name: namespace
+      type: string
+      default: default
+      description: Target namespace
+  tasks:
+    - name: deploy-app
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            oc create deployment $(params.deployment-name) \
+              --image=$(params.image-name) \
+              --namespace=$(params.namespace) \
+              --dry-run=client -o yaml | oc apply -f -
+EOF
+
+cat > tasks/code-quality-check.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: code-quality-check
+  labels:
+    version: "1.0.0"
+spec:
+  description: Performs code quality checks using ESLint
+  params:
+    - name: source-path
+      type: string
+      default: "."
+      description: Path to source code
+  workspaces:
+    - name: source
+      description: Workspace containing source code
+  steps:
+    - name: run-eslint
+      image: node:18-alpine
+      workingDir: $(workspaces.source.path)/$(params.source-path)
+      script: |
+        #!/bin/sh
+        if [ -f package.json ]; then
+          npm install
+          npx eslint . --ext .js,.jsx,.ts,.tsx || true
+        else
+          echo "No package.json found, skipping lint"
+        fi
+EOF
+Commit everything created so far:
+
+git add .
+git commit -m "Initial commit: add build pipeline, deploy pipeline, and code quality task"
+Deliverable for Task 1: A Git repository at ~/pipeline-version-control with an initial commit containing README.md, pipelines/build/nodejs-build-pipeline.yaml, pipelines/deploy/nodejs-deploy-pipeline.yaml, and tasks/code-quality-check.yaml.
+
+Expected result: Running git log --oneline shows one commit, and git show --stat HEAD lists all four files as added.
+
+Task 2: Apply Semantic Versioning and Track Environment Variants
+Step 1: Create a version manager script
+cat > scripts/version-manager.sh << 'EOF'
+#!/bin/bash
+# Pipeline Version Manager
+# Usage: ./version-manager.sh [major|minor|patch] [pipeline-file]
+
+set -euo pipefail
+
+VERSION_TYPE=${1:-patch}
+PIPELINE_FILE=${2:-}
+
+if [ -z "$PIPELINE_FILE" ]; then
+    echo "Usage: $0 [major|minor|patch] [pipeline-file]"
+    exit 1
+fi
+
+if [ ! -f "$PIPELINE_FILE" ]; then
+    echo "Pipeline file not found: $PIPELINE_FILE"
+    exit 1
+fi
+
+CURRENT_VERSION=$(grep -o 'version: "[0-9]*\.[0-9]*\.[0-9]*"' "$PIPELINE_FILE" | head -1 | grep -o '[0-9]*\.[0-9]*\.[0-9]*')
+
+if [ -z "$CURRENT_VERSION" ]; then
+    echo "No version found in pipeline file. Assuming 1.0.0"
+    CURRENT_VERSION="1.0.0"
+fi
+
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+case $VERSION_TYPE in
+    major)
+        MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+        ;;
+    minor)
+        MINOR=$((MINOR + 1)); PATCH=0
+        ;;
+    patch)
+        PATCH=$((PATCH + 1))
+        ;;
+    *)
+        echo "Invalid version type. Use: major, minor, or patch"
+        exit 1
+        ;;
+esac
+
+NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+sed -i "s/version: \"[0-9]*\.[0-9]*\.[0-9]*\"/version: \"$NEW_VERSION\"/" "$PIPELINE_FILE"
+
+echo "Updated $PIPELINE_FILE from version $CURRENT_VERSION to $NEW_VERSION"
+EOF
+
+chmod +x scripts/version-manager.sh
+Step 2: Tag the initial release
+git add scripts/version-manager.sh
+git commit -m "chore: add semantic version manager script"
+
+git tag -a v1.0.0 -m "Initial release: build pipeline, deploy pipeline, code quality task"
+git tag --list
+Step 3: Create environment-specific pipeline variants
+cat > environments/dev/nodejs-build-dev.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: nodejs-build-dev
+  labels:
+    version: "1.0.0"
+    environment: dev
+    type: build
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+      default: develop
+    - name: image-name
+      type: string
+  workspaces:
+    - name: shared-data
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: IMAGE
+          value: $(params.image-name):dev
+EOF
+
+cat > environments/prod/nodejs-build-prod.yaml << 'EOF'
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: nodejs-build-prod
+  labels:
+    version: "1.0.0"
+    environment: prod
+    type: build
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+      default: main
+    - name: image-name
+      type: string
+  workspaces:
+    - name: shared-data
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-data
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+    - name: code-quality
+      taskRef:
+        name: code-quality-check
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-data
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - code-quality
+      workspaces:
+        - name: source
+          workspace: shared-data
+      params:
+        - name: IMAGE
+          value: $(params.image-name):$(params.git-revision)
+EOF
+
+git add environments/
+git commit -m "feat: add dev and prod environment-specific pipeline variants"
+Step 4: Bump the version and tag the release
+./scripts/version-manager.sh minor pipelines/build/nodejs-build-pipeline.yaml
+git add pipelines/build/nodejs-build-pipeline.yaml
+git commit -m "chore: bump nodejs-build-pipeline to 1.1.0"
+
+git tag -a v1.1.0 -m "Version 1.1.0: environment-specific pipeline variants"
+git tag --list --sort=-version:refname
+Deliverable for Task 2: Two annotated Git tags (v1.0.0 and v1.1.0), a working scripts/version-manager.sh, and environment variants under environments/dev and environments/prod.
+
+Expected result: git tag --list shows v1.0.0 and v1.1.0. Running grep version pipelines/build/nodejs-build-pipeline.yaml shows version: "1.1.0".
+
+Task 3: Validate Pipelines and Implement a Rollback Procedure
+Step 1: Create a YAML validation script
+cat > automation/validate-pipelines.sh << 'EOF'
+#!/bin/bash
+# Validates every YAML file under pipelines/, tasks/, and environments/
+
+set -uo pipefail
+
+ERRORS=0
+
+for FILE in $(find pipelines tasks environments -name "*.yaml" -type f); do
+    echo -n "Validating $FILE ... "
+    if python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$FILE" > /dev/null 2>&1; then
+        echo "OK"
+    else
+        echo "INVALID"
+        ERRORS=$((ERRORS + 1))
+    fi
+done
+
+if [ "$ERRORS" -gt 0 ]; then
+    echo "Validation failed: $ERRORS file(s) with errors"
+    exit 1
+fi
+
+echo "All pipeline YAML files are valid"
+EOF
+
+chmod +x automation/validate-pipelines.sh
+./automation/validate-pipelines.sh
+Step 2: Create the rollback script
+cat > automation/pipeline-rollback.sh << 'EOF'
+#!/bin/bash
+# Rolls the pipelines/ directory back to a previous Git tag
+# Usage: ./pipeline-rollback.sh <target-tag>
+
+set -euo pipefail
+
+TARGET_TAG=${1:-}
+
+if [ -z "$TARGET_TAG" ]; then
+    echo "Usage: $0 <target-tag>"
+    exit 1
+fi
+
+if ! git tag --list | grep -qx "$TARGET_TAG"; then
+    echo "Error: tag $TARGET_TAG not found"
+    echo "Available tags:"
+    git tag --list --sort=-version:refname
+    exit 1
+fi
+
+CURRENT_BRANCH=$(git branch --show-current)
+ROLLBACK_BRANCH="rollback-to-${TARGET_TAG}"
+
+echo "Current branch: $CURRENT_BRANCH"
+echo "Creating rollback branch: $ROLLBACK_BRANCH"
+git checkout -b "$ROLLBACK_BRANCH"
+
+echo "Restoring pipelines/ from tag $TARGET_TAG"
+git checkout "$TARGET_TAG" -- pipelines/
+
+echo
+echo "Files restored to state at $TARGET_TAG:"
+git diff --name-only "$CURRENT_BRANCH" -- pipelines/
+
+echo
+echo "Next steps:"
+echo "1. Review the changes with: git diff $CURRENT_BRANCH"
+echo "2. Commit the rollback: git commit -am 'Rollback pipelines to $TARGET_TAG'"
+echo "3. Merge back if approved: git checkout $CURRENT_BRANCH && git merge $ROLLBACK_BRANCH"
+EOF
+
+chmod +x automation/pipeline-rollback.sh
+Step 3: Test the rollback against v1.0.0
+git add automation/
+git commit -m "feat: add YAML validation and rollback automation scripts"
+
+# Roll the build pipeline back to its original 1.0.0 definition
+./automation/pipeline-rollback.sh v1.0.0
+After running the script, confirm the restored file no longer contains the 1.1.0 label:
+
+grep version pipelines/build/nodejs-build-pipeline.yaml
+Commit the rollback and return to the main branch:
+
+git commit -am "Rollback nodejs-build-pipeline to v1.0.0"
+git checkout main
+git log --oneline --graph --decorate --all
+Deliverable for Task 3: A passing run of automation/validate-pipelines.sh with no invalid files, and a rollback-to-v1.0.0 branch containing a commit that restores the pipeline file to its 1.0.0 content.
+
+Expected result: grep version pipelines/build/nodejs-build-pipeline.yaml on the rollback branch shows version: "1.0.0", while the same command on main still shows version: "1.1.0".
+
+Expected Outcomes
+A Git repository with pipeline YAML files organized by type and environment
+At least two annotated version tags (v1.0.0, v1.1.0) tracking pipeline evolution
+A working validation script confirming all pipeline YAML is syntactically correct
+A tested rollback branch demonstrating recovery to a prior pipeline version
+Troubleshooting
+Issue: python3 -c "import yaml..." fails with ModuleNotFoundError: No module named 'yaml' Diagnostic hint: run pip3 show pyyaml to confirm the package installed for the Python interpreter being invoked; if using a virtual environment, activate it before running the validation script.
+
+Issue: git checkout <tag> -- pipelines/ reports "did not match any file(s) known to git" Diagnostic hint: run git tag --list to confirm the tag name is spelled exactly as created, and confirm the pipelines/ path existed at that tag with git show <tag> --stat.
+
+Conclusion
+In this lab, you implemented a practical version control strategy for OpenShift Tekton pipelines, starting from an organized Git repository structure through semantic versioning, environment-specific pipeline variants, automated YAML validation, and a working rollback procedure. You practiced tagging releases with git tag, incrementing versions with a reusable shell script, and recovering a prior pipeline definition using a dedicated rollback branch. These skills translate directly to real CI/CD operations, where reliably tracking, validating, and reverting pipeline changes is essential to keeping deployment automation safe and auditable. As a next step, consider extending the validation script to run in a Git pre-commit hook and wiring the rollback branch workflow into a pull-request-based review process before changes reach production pipelines.

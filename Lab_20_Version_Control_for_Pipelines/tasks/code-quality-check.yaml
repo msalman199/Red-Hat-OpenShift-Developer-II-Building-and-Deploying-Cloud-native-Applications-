@@ -1,0 +1,28 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: code-quality-check
+  labels:
+    version: "1.0.0"
+spec:
+  description: Performs code quality checks using ESLint
+  params:
+    - name: source-path
+      type: string
+      default: "."
+      description: Path to source code
+  workspaces:
+    - name: source
+      description: Workspace containing source code
+  steps:
+    - name: run-eslint
+      image: node:18-alpine
+      workingDir: $(workspaces.source.path)/$(params.source-path)
+      script: |
+        #!/bin/sh
+        if [ -f package.json ]; then
+          npm install
+          npx eslint . --ext .js,.jsx,.ts,.tsx || true
+        else
+          echo "No package.json found, skipping lint"
+        fi

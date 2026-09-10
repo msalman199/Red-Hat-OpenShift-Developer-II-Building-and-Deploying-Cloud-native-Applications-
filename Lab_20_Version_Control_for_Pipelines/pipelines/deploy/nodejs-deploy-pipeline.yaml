@@ -1,0 +1,31 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: nodejs-deploy-pipeline
+  labels:
+    version: "1.0.0"
+    type: deploy
+spec:
+  params:
+    - name: image-name
+      type: string
+      description: Container image to deploy
+    - name: deployment-name
+      type: string
+      description: Name of the deployment
+    - name: namespace
+      type: string
+      default: default
+      description: Target namespace
+  tasks:
+    - name: deploy-app
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      params:
+        - name: SCRIPT
+          value: |
+            oc create deployment $(params.deployment-name) \
+              --image=$(params.image-name) \
+              --namespace=$(params.namespace) \
+              --dry-run=client -o yaml | oc apply -f -
