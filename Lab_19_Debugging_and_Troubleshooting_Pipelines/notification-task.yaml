@@ -1,0 +1,19 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: notification-task
+spec:
+  params:
+    - name: message
+      type: string
+  steps:
+    - name: notify
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "==================================="
+        echo "PIPELINE NOTIFICATION"
+        echo "==================================="
+        echo "Message: $(params.message)"
+        echo "Timestamp: $(date)"
+        echo "==================================="
