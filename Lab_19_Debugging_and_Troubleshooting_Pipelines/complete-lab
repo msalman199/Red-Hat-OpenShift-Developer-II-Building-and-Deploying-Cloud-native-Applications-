@@ -1,0 +1,582 @@
+Video
+Lab Material
+Lab 19: Debugging and Troubleshooting Pipelines
+Objectives
+By the end of this lab, you will be able to:
+
+Use the tkn CLI to inspect and troubleshoot failing Tekton pipelines
+Analyze OpenShift logs to identify root causes of pipeline failures
+Diagnose issues with failed tasks and understand retry mechanisms
+Implement effective fixes for common pipeline problems and rerun pipelines successfully
+Apply a systematic, repeatable debugging approach to CI/CD pipeline issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes and OpenShift concepts
+Familiarity with YAML syntax and structure
+Knowledge of containerization and Docker/Dockerfile concepts
+Understanding of CI/CD pipeline fundamentals
+Experience with command-line interfaces
+Completion of previous Tekton pipeline labs (recommended)
+Ready-to-Use Cloud Machines
+Al Nafi provides pre-configured Linux-based cloud machines with all necessary tools installed. Simply click Start Lab to access your environment. No need to build your own VM or install additional software â everything is ready to use!
+
+Your lab environment includes:
+
+OpenShift cluster with Tekton Pipelines installed
+tkn CLI tool pre-configured
+oc CLI tool for OpenShift operations
+Sample applications and pipeline definitions
+All required permissions and access configured
+If you need to verify or install the CLIs manually on a workstation, use:
+
+# Verify tkn CLI is installed
+tkn version
+
+# Verify oc CLI is installed
+oc version --client
+
+# If missing, install on Linux (example for tkn)
+curl -LO https://github.com/tektoncd/cli/releases/latest/download/tkn_Linux_x86_64.tar.gz
+tar xvzf tkn_Linux_x86_64.tar.gz -C /usr/local/bin tkn
+Lab Environment Setup
+Verify Lab Environment and Tools
+# Check OpenShift connection
+oc whoami
+
+# Verify cluster information
+oc cluster-info
+
+# Check current project
+oc project
+
+# Check Tekton Pipelines installation
+oc get pods -n openshift-pipelines
+
+# Verify tkn CLI version
+tkn version
+
+# List available Tekton resources
+tkn pipeline list
+tkn task list
+Create a dedicated project for this lab:
+
+# Create new project
+oc new-project pipeline-debug-lab
+
+# Verify project creation
+oc project pipeline-debug-lab
+Deliverable: oc project shows pipeline-debug-lab as the active project, and oc get pods -n openshift-pipelines shows the Tekton controller and webhook pods in Running state.
+
+Task 1: Use tkn CLI and OpenShift Logs to Troubleshoot a Failing Pipeline
+Step 1.1: Create a Deliberately Failing Task and Pipeline
+# Create a task with potential failure points
+cat << 'EOF' > failing-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: failing-build-task
+spec:
+  params:
+    - name: image-name
+      type: string
+      default: "my-app"
+    - name: dockerfile-path
+      type: string
+      default: "./Dockerfile"
+  workspaces:
+    - name: source
+  steps:
+    - name: check-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        echo "Checking for Dockerfile..."
+        if [ ! -f "$(params.dockerfile-path)" ]; then
+          echo "ERROR: Dockerfile not found at $(params.dockerfile-path)"
+          exit 1
+        fi
+        echo "Dockerfile found successfully"
+
+    - name: build-image
+      image: registry.redhat.io/ubi8/buildah:latest
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/bash
+        echo "Building container image..."
+        buildah build -t $(params.image-name) -f $(params.dockerfile-path) .
+        echo "Build completed successfully"
+
+    - name: failing-step
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "This step will fail intentionally..."
+        nonexistent_command_that_will_fail
+        echo "This line will never be reached"
+EOF
+
+oc apply -f failing-task.yaml
+# Create a pipeline that uses our failing task
+cat << 'EOF' > failing-pipeline.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: debug-pipeline
+spec:
+  params:
+    - name: git-url
+      type: string
+      default: "https://github.com/openshift/nodejs-ex.git"
+    - name: image-name
+      type: string
+      default: "debug-app"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: git-clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: failing-build
+      taskRef:
+        name: failing-build-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: dockerfile-path
+          value: "./Dockerfile.missing"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - git-clone
+EOF
+
+oc apply -f failing-pipeline.yaml
+# Create a PersistentVolumeClaim for the shared workspace
+cat << 'EOF' > workspace-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: debug-workspace-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+oc apply -f workspace-pvc.yaml
+
+# Run the pipeline (this run is expected to fail)
+tkn pipeline start debug-pipeline \
+  --param git-url=https://github.com/openshift/nodejs-ex.git \
+  --param image-name=debug-app \
+  --workspace name=shared-workspace,claimName=debug-workspace-pvc \
+  --showlog
+Deliverable: The tkn pipeline start command exits after showing a Failed status in the streamed logs, because Dockerfile.missing does not exist and failing-step runs an invalid command.
+
+Step 1.2: Investigate the Failure with tkn CLI
+# List recent pipeline runs
+tkn pipelinerun list
+
+# Get the latest pipeline run name
+LATEST_RUN=$(tkn pipelinerun list -o name | head -1 | cut -d'/' -f2)
+echo "Latest pipeline run: $LATEST_RUN"
+
+# Describe the pipeline run
+tkn pipelinerun describe $LATEST_RUN
+
+# Check the logs of the failed pipeline run
+tkn pipelinerun logs $LATEST_RUN
+
+# List task runs for this pipeline run
+tkn taskrun list --label tekton.dev/pipelineRun=$LATEST_RUN
+# Identify and inspect the failed task run
+FAILED_TASKRUN=$(tkn taskrun list --label tekton.dev/pipelineRun=$LATEST_RUN -o name | grep failing-build | cut -d'/' -f2)
+echo "Failed task run: $FAILED_TASKRUN"
+
+tkn taskrun describe $FAILED_TASKRUN
+tkn taskrun logs $FAILED_TASKRUN
+
+# Check specific step logs
+tkn taskrun logs $FAILED_TASKRUN --step check-dockerfile
+tkn taskrun logs $FAILED_TASKRUN --step failing-step
+Step 1.3: Cross-Check with OpenShift Logs
+# Get the pod associated with the failed task run
+FAILED_POD=$(oc get pods -l tekton.dev/taskRun=$FAILED_TASKRUN -o name)
+echo "Failed pod: $FAILED_POD"
+
+# Get detailed pod information (look at container statuses and events)
+oc describe $FAILED_POD
+
+# Check pod logs across all containers
+oc logs $FAILED_POD --all-containers=true
+
+# Check logs for a specific step container
+oc logs $FAILED_POD -c step-check-dockerfile
+oc logs $FAILED_POD -c step-failing-step
+
+# Check pod-level events for scheduling or image-pull problems
+oc get events --field-selector involvedObject.name=${FAILED_POD#pod/}
+Deliverable: You can point to two distinct, confirmed root causes: (1) check-dockerfile step logs show ERROR: Dockerfile not found at ./Dockerfile.missing, and (2) failing-step logs show a command not found error for nonexistent_command_that_will_fail. The tkn pipelinerun describe output shows Status: Failed with the failing-build task listed as the failure point.
+
+Expected result: You should be able to state, in one sentence per task, exactly which step failed and why, using only tkn and oc output as evidence.
+
+Task 2: Diagnose Task Failures and Implement Retry Mechanisms
+Step 2.1: Reproduce Common Failure Patterns
+# Create a task with multiple failure scenarios
+cat << 'EOF' > diagnostic-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: diagnostic-task
+spec:
+  params:
+    - name: failure-type
+      type: string
+      default: "none"
+  steps:
+    - name: resource-check
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "Checking system resources..."
+        df -h
+        free -m
+        echo "Resource check completed"
+
+    - name: conditional-failure
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        case "$(params.failure-type)" in
+          "command-not-found")
+            echo "Simulating command not found error..."
+            nonexistent_command
+            ;;
+          "permission-denied")
+            echo "Simulating permission denied error..."
+            touch /tmp/test-file
+            chmod 000 /tmp/test-file
+            cat /tmp/test-file
+            ;;
+          *)
+            echo "No failure simulation requested"
+            ;;
+        esac
+        echo "Step completed successfully"
+EOF
+
+oc apply -f diagnostic-task.yaml
+# Test command-not-found scenario
+tkn task start diagnostic-task \
+  --param failure-type=command-not-found \
+  --showlog
+
+# Identify and describe the resulting task run
+DIAG_TASKRUN=$(tkn taskrun list -o name | head -1 | cut -d'/' -f2)
+tkn taskrun describe $DIAG_TASKRUN
+
+# Test permission-denied scenario
+tkn task start diagnostic-task \
+  --param failure-type=permission-denied \
+  --showlog
+Deliverable: For each scenario, tkn taskrun logs shows a distinct failure signature: command-not-found produces an exit-127-style "command not found" message, while permission-denied produces a "Permission denied" message from cat. Record which exit code corresponds to each failure type using tkn taskrun describe <name> | grep -A 3 "Message".
+
+Step 2.2: Configure and Observe Retries
+# Create a task that fails on the first two attempts, then succeeds
+cat << 'EOF' > retry-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: retry-task
+spec:
+  steps:
+    - name: flaky-operation
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        ATTEMPT_FILE="/tmp/attempt_count"
+
+        if [ -f "$ATTEMPT_FILE" ]; then
+          ATTEMPT=$(cat $ATTEMPT_FILE)
+          ATTEMPT=$((ATTEMPT + 1))
+        else
+          ATTEMPT=1
+        fi
+        echo $ATTEMPT > $ATTEMPT_FILE
+
+        echo "Attempt #$ATTEMPT"
+
+        if [ $ATTEMPT -lt 3 ]; then
+          echo "Simulating transient failure on attempt $ATTEMPT"
+          exit 1
+        else
+          echo "Success on attempt $ATTEMPT!"
+          exit 0
+        fi
+EOF
+
+oc apply -f retry-task.yaml
+
+# Create a pipeline that retries the flaky task up to 2 additional times
+cat << 'EOF' > retry-pipeline.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: retry-pipeline
+spec:
+  tasks:
+    - name: retry-test
+      taskRef:
+        name: retry-task
+      retries: 2
+EOF
+
+oc apply -f retry-pipeline.yaml
+
+tkn pipeline start retry-pipeline --showlog
+Note: because each retry runs in a fresh pod, /tmp/attempt_count resets between attempts in a real cluster. For a deterministic classroom demonstration, treat each retry attempt's logs as attempt #1 and confirm instead that Tekton actually performed the configured number of retry attempts (see below), rather than relying on the counter to reach 3.
+
+# Capture the pipeline run name
+RETRY_RUN=$(tkn pipelinerun list -o name | head -1 | cut -d'/' -f2)
+
+# Confirm the final status
+tkn pipelinerun describe $RETRY_RUN
+
+# List every task run attempt generated for this pipeline run
+tkn taskrun list --label tekton.dev/pipelineRun=$RETRY_RUN
+
+# Inspect retry status directly from the underlying resource
+oc get taskrun -l tekton.dev/pipelineRun=$RETRY_RUN -o jsonpath='{.items[0].status.retriesStatus}' | jq
+Deliverable: oc get taskrun ... -o jsonpath='{.items[0].status.retriesStatus}' returns a JSON array with entries for each retry attempt, confirming Tekton executed the task multiple times as configured by retries: 2. tkn pipelinerun describe $RETRY_RUN shows the final pipeline status (Succeeded or Failed depending on cluster ephemeral storage behavior) along with the retry count for retry-test.
+
+Task 3: Implement Fixes and Rerun the Pipeline Successfully
+Step 3.1: Fix the Root Causes
+# Create a corrected task that self-heals a missing Dockerfile
+cat << 'EOF' > fixed-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: fixed-build-task
+spec:
+  params:
+    - name: image-name
+      type: string
+      default: "my-app"
+    - name: dockerfile-path
+      type: string
+      default: "./Dockerfile"
+  workspaces:
+    - name: source
+  steps:
+    - name: check-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        echo "Checking for Dockerfile..."
+
+        if [ -f "$(params.dockerfile-path)" ]; then
+          echo "Found Dockerfile at: $(params.dockerfile-path)"
+          echo "$(params.dockerfile-path)" > /tmp/dockerfile-path
+        else
+          echo "No Dockerfile found at $(params.dockerfile-path). Creating a default one..."
+          cat << 'DOCKERFILE' > ./Dockerfile
+        FROM registry.redhat.io/ubi8/nodejs-14:latest
+        COPY . /app
+        WORKDIR /app
+        RUN npm install
+        EXPOSE 8080
+        CMD ["npm", "start"]
+        DOCKERFILE
+          echo "./Dockerfile" > /tmp/dockerfile-path
+          echo "Created default Dockerfile"
+        fi
+
+    - name: validate-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        DOCKERFILE_PATH=$(cat /tmp/dockerfile-path)
+        echo "Validating Dockerfile at: $DOCKERFILE_PATH"
+
+        if grep -q "FROM" "$DOCKERFILE_PATH"; then
+          echo "Dockerfile validation passed"
+        else
+          echo "ERROR: Invalid Dockerfile format"
+          exit 1
+        fi
+
+    - name: success-step
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "All checks passed successfully!"
+        echo "Build task completed without errors"
+EOF
+
+oc apply -f fixed-task.yaml
+Step 3.2: Build an Improved Pipeline with Cleanup and Notification
+# Supporting task: cleanup
+cat << 'EOF' > cleanup-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup-task
+spec:
+  workspaces:
+    - name: source
+  steps:
+    - name: cleanup
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        echo "Performing cleanup operations..."
+        find . -name "*.tmp" -delete
+        find . -name "*.log" -delete
+        echo "Cleanup completed successfully"
+EOF
+
+# Supporting task: notification
+cat << 'EOF' > notification-task.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: notification-task
+spec:
+  params:
+    - name: message
+      type: string
+  steps:
+    - name: notify
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "==================================="
+        echo "PIPELINE NOTIFICATION"
+        echo "==================================="
+        echo "Message: $(params.message)"
+        echo "Timestamp: $(date)"
+        echo "==================================="
+EOF
+
+oc apply -f cleanup-task.yaml
+oc apply -f notification-task.yaml
+
+# Improved pipeline: fixed task, retries, cleanup, and a finally notification
+cat << 'EOF' > improved-pipeline.yaml
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: improved-pipeline
+spec:
+  params:
+    - name: git-url
+      type: string
+      default: "https://github.com/openshift/nodejs-ex.git"
+    - name: image-name
+      type: string
+      default: "improved-app"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: git-clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      retries: 1
+
+    - name: fixed-build
+      taskRef:
+        name: fixed-build-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: dockerfile-path
+          value: "./Dockerfile.missing"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - git-clone
+      retries: 1
+
+    - name: cleanup
+      taskRef:
+        name: cleanup-task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - fixed-build
+  finally:
+    - name: notification
+      taskRef:
+        name: notification-task
+      params:
+        - name: message
+          value: "Pipeline $(context.pipelineRun.name) finished"
+EOF
+
+oc apply -f improved-pipeline.yaml
+Note that fixed-build is intentionally given the same missing Dockerfile.missing path used earlier, to prove the self-healing logic in fixed-build-task handles the exact failure condition from Task 1.
+
+Step 3.3: Rerun and Verify the Fix
+# Run the improved pipeline
+tkn pipeline start improved-pipeline \
+  --param git-url=https://github.com/openshift/nodejs-ex.git \
+  --param image-name=improved-app \
+  --workspace name=shared-workspace,claimName=debug-workspace-pvc \
+  --showlog
+
+# Capture and verify the run
+IMPROVED_RUN=$(tkn pipelinerun list -o name | head -1 | cut -d'/' -f2)
+echo "Improved pipeline run: $IMPROVED_RUN"
+
+tkn pipelinerun describe $IMPROVED_RUN
+
+# Confirm every task run succeeded
+tkn taskrun list --label tekton.dev/pipelineRun=$IMPROVED_RUN
+# Compare the original failing run against the fixed run
+ORIGINAL_RUN=$(tkn pipelinerun list | grep debug-pipeline | head -1 | awk '{print $1}')
+
+echo "=== ORIGINAL FAILING PIPELINE ==="
+tkn pipelinerun describe $ORIGINAL_RUN | grep -A 5 "Status"
+
+echo "=== IMPROVED PIPELINE ==="
+tkn pipelinerun describe $IMPROVED_RUN | grep -A 5 "Status"
+Deliverable: tkn pipelinerun describe $IMPROVED_RUN reports Status: Succeeded, with all three tasks (git-clone, fixed-build, cleanup) and the notification finally-task showing Succeeded. The side-by-side comparison output clearly shows Failed for $ORIGINAL_RUN and Succeeded for $IMPROVED_RUN, proving the root causes identified in Task 1 were resolved.
+
+Expected result: A fully green pipeline run in tkn pipelinerun describe, with the notification task's logs showing the message Pipeline improved-pipeline-run-xxxxx finished.
+
+Expected Outcomes
+You can independently trace a Tekton pipeline failure from tkn pipelinerun describe down to the specific failing step's container logs using both tkn and oc.
+You can configure and verify retries on a Task within a Pipeline, and confirm retry attempts using retriesStatus.
+You can apply a targeted code fix to a Task definition, rerun the pipeline, and produce evidence (via tkn pipelinerun describe) that the original failure no longer occurs.
+Troubleshooting
+If tkn pipelinerun describe shows a task stuck in Pending rather than Failed, what would you check next using oc describe pod and oc get events to distinguish between a scheduling problem, an image pull problem, and a workspace/PVC binding problem?
+If the retry-pipeline run succeeds on the first attempt instead of demonstrating retries, what does that tell you about how Tekton provisions pods per retry attempt, and how would you redesign the flaky-operation script (for example, using an external ConfigMap or a shared PVC file instead of /tmp) to make the failure state persist across retry attempts?
+Conclusion
+Congratulations! You have successfully completed Lab 19: Debugging and Troubleshooting Pipelines. You built a deliberately failing Tekton pipeline, used tkn pipelinerun describe, tkn taskrun logs, and oc logs/oc describe pod together to isolate two distinct root causes, and then verified Tekton's retry mechanism using retriesStatus. You then implemented a self-healing task, assembled an improved pipeline with retries, cleanup, and a finally notification block, and proved the fix by rerunning the pipeline to a fully Succeeded state. The key takeaway is a repeatable debugging workflow: start broad with tkn pipelinerun describe, narrow down to the failing taskrun, confirm with container-level oc logs, apply a targeted fix, and rerun to validate â the same approach you can now apply to any production Tekton pipeline failure. From here, consider exploring Tekton Triggers for event-driven pipeline execution, Tekton Chains for supply-chain security, and integrating Tekton Results for long-term pipeline run history and auditing.
