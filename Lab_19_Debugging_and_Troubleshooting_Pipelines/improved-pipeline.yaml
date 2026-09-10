@@ -1,0 +1,57 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: improved-pipeline
+spec:
+  params:
+    - name: git-url
+      type: string
+      default: "https://github.com/openshift/nodejs-ex.git"
+    - name: image-name
+      type: string
+      default: "improved-app"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: git-clone
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      params:
+        - name: url
+          value: $(params.git-url)
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      retries: 1
+
+    - name: fixed-build
+      taskRef:
+        name: fixed-build-task
+      params:
+        - name: image-name
+          value: $(params.image-name)
+        - name: dockerfile-path
+          value: "./Dockerfile.missing"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - git-clone
+      retries: 1
+
+    - name: cleanup
+      taskRef:
+        name: cleanup-task
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      runAfter:
+        - fixed-build
+  finally:
+    - name: notification
+      taskRef:
+        name: notification-task
+      params:
+        - name: message
+          value: "Pipeline $(context.pipelineRun.name) finished"
