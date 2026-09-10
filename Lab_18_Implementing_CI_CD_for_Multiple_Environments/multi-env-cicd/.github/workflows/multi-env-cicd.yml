@@ -1,0 +1,77 @@
+name: Multi-Environment CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: multi-env-app
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: src
+        run: npm install
+
+      - name: Run unit tests
+        working-directory: src
+        run: npm test
+
+      - name: Build Docker image
+        run: |
+          cd src
+          docker build -t ${{ env.IMAGE_NAME }}:dev-${{ github.sha }} .
+
+  deploy-dev:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to development
+        run: |
+          echo "Would run: ./scripts/deploy.sh dev ${{ github.sha }}"
+      - name: Test development deployment
+        run: |
+          echo "Would run: ./scripts/test.sh dev"
+
+  deploy-staging:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to staging
+        run: |
+          echo "Would run: ./scripts/deploy.sh staging ${{ github.sha }}"
+      - name: Test staging deployment
+        run: |
+          echo "Would run: ./scripts/test.sh staging"
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Deploy to production
+        run: |
+          echo "Would run: ./scripts/deploy.sh prod ${{ github.sha }}"
+      - name: Test production deployment
+        run: |
+          echo "Would run: ./scripts/test.sh prod"
