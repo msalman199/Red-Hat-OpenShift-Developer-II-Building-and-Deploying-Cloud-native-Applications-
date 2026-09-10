@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: retry-pipeline
+spec:
+  tasks:
+    - name: retry-test
+      taskRef:
+        name: retry-task
+      retries: 2
