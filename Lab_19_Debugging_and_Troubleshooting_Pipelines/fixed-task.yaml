@@ -1,0 +1,60 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: fixed-build-task
+spec:
+  params:
+    - name: image-name
+      type: string
+      default: "my-app"
+    - name: dockerfile-path
+      type: string
+      default: "./Dockerfile"
+  workspaces:
+    - name: source
+  steps:
+    - name: check-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        echo "Checking for Dockerfile..."
+
+        if [ -f "$(params.dockerfile-path)" ]; then
+          echo "Found Dockerfile at: $(params.dockerfile-path)"
+          echo "$(params.dockerfile-path)" > /tmp/dockerfile-path
+        else
+          echo "No Dockerfile found at $(params.dockerfile-path). Creating a default one..."
+          cat << 'DOCKERFILE' > ./Dockerfile
+        FROM registry.redhat.io/ubi8/nodejs-14:latest
+        COPY . /app
+        WORKDIR /app
+        RUN npm install
+        EXPOSE 8080
+        CMD ["npm", "start"]
+        DOCKERFILE
+          echo "./Dockerfile" > /tmp/dockerfile-path
+          echo "Created default Dockerfile"
+        fi
+
+    - name: validate-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        DOCKERFILE_PATH=$(cat /tmp/dockerfile-path)
+        echo "Validating Dockerfile at: $DOCKERFILE_PATH"
+
+        if grep -q "FROM" "$DOCKERFILE_PATH"; then
+          echo "Dockerfile validation passed"
+        else
+          echo "ERROR: Invalid Dockerfile format"
+          exit 1
+        fi
+
+    - name: success-step
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "All checks passed successfully!"
+        echo "Build task completed without errors"
