@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-env-app
+  namespace: multi-env-staging
+  labels:
+    app: multi-env-app
+    environment: staging
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: multi-env-app
+  template:
+    metadata:
+      labels:
+        app: multi-env-app
+        environment: staging
+    spec:
+      containers:
+      - name: app
+        image: multi-env-app:staging-1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: NODE_ENV
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_VERSION
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
