@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: multi-env-dev
+data:
+  NODE_ENV: "development"
+  APP_VERSION: "dev-1.0.0"
+  LOG_LEVEL: "debug"
