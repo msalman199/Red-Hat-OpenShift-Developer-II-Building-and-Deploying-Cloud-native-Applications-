@@ -1,0 +1,39 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: diagnostic-task
+spec:
+  params:
+    - name: failure-type
+      type: string
+      default: "none"
+  steps:
+    - name: resource-check
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "Checking system resources..."
+        df -h
+        free -m
+        echo "Resource check completed"
+
+    - name: conditional-failure
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        case "$(params.failure-type)" in
+          "command-not-found")
+            echo "Simulating command not found error..."
+            nonexistent_command
+            ;;
+          "permission-denied")
+            echo "Simulating permission denied error..."
+            touch /tmp/test-file
+            chmod 000 /tmp/test-file
+            cat /tmp/test-file
+            ;;
+          *)
+            echo "No failure simulation requested"
+            ;;
+        esac
+        echo "Step completed successfully"
