@@ -1,0 +1,29 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: retry-task
+spec:
+  steps:
+    - name: flaky-operation
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        ATTEMPT_FILE="/tmp/attempt_count"
+
+        if [ -f "$ATTEMPT_FILE" ]; then
+          ATTEMPT=$(cat $ATTEMPT_FILE)
+          ATTEMPT=$((ATTEMPT + 1))
+        else
+          ATTEMPT=1
+        fi
+        echo $ATTEMPT > $ATTEMPT_FILE
+
+        echo "Attempt #$ATTEMPT"
+
+        if [ $ATTEMPT -lt 3 ]; then
+          echo "Simulating transient failure on attempt $ATTEMPT"
+          exit 1
+        else
+          echo "Success on attempt $ATTEMPT!"
+          exit 0
+        fi
