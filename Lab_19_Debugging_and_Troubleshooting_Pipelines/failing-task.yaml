@@ -1,0 +1,45 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: failing-build-task
+spec:
+  params:
+    - name: image-name
+      type: string
+      default: "my-app"
+    - name: dockerfile-path
+      type: string
+      default: "./Dockerfile"
+  workspaces:
+    - name: source
+  steps:
+    - name: check-dockerfile
+      image: registry.redhat.io/ubi8/ubi:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        echo "Checking for Dockerfile..."
+        if [ ! -f "$(params.dockerfile-path)" ]; then
+          echo "ERROR: Dockerfile not found at $(params.dockerfile-path)"
+          exit 1
+        fi
+        echo "Dockerfile found successfully"
+
+    - name: build-image
+      image: registry.redhat.io/ubi8/buildah:latest
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/bash
+        echo "Building container image..."
+        buildah build -t $(params.image-name) -f $(params.dockerfile-path) .
+        echo "Build completed successfully"
+
+    - name: failing-step
+      image: registry.redhat.io/ubi8/ubi:latest
+      script: |
+        #!/bin/bash
+        echo "This step will fail intentionally..."
+        nonexistent_command_that_will_fail
+        echo "This line will never be reached"
